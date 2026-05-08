@@ -1,2 +1,8 @@
 .venv/
 .DS_Store
+mykey.py
+mykey.json
+.env
+__pycache__/
+*.pyc
+temp/
