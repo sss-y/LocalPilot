@@ -15,7 +15,7 @@ from .memory_tools import (
 from .plan_tools import _check_plan_completion, _exit_plan_mode, _in_plan_mode, enter_plan_mode
 from .schemas import TOOLS_SCHEMA, TOOLS_SCHEMA_CN, get_tools_schema, load_tool_schema
 from .serialization import json_default
-from .web_tools import first_init_driver, web_execute_js, web_scan
+# from .web_tools import first_init_driver, web_execute_js, web_scan
 
 __all__ = [
     "TOOLS_SCHEMA",
@@ -36,7 +36,7 @@ __all__ = [
     "expand_file_refs",
     "file_patch",
     "file_read",
-    "first_init_driver",
+    # "first_init_driver",
     "format_error",
     "get_global_memory",
     "get_tools_schema",
@@ -45,6 +45,6 @@ __all__ = [
     "log_memory_access",
     "smart_format",
     "try_call_generator",
-    "web_execute_js",
-    "web_scan",
+    # "web_execute_js",
+    # "web_scan",
 ]

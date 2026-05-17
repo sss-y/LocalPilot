@@ -23,7 +23,7 @@ from .plan_tools import (
     _in_plan_mode as in_plan_mode,
     enter_plan_mode as set_plan_mode,
 )
-from .web_tools import web_execute_js, web_scan
+# from .web_tools import web_execute_js, web_scan
 
 def json_default(obj):
     return list(obj) if isinstance(obj, set) else str(obj)
@@ -106,56 +106,7 @@ class GenericAgentHandler(BaseHandler):
         result = ask_user(question, candidates)
         yield "Waiting for your answer ...\n"
         return StepOutcome(result, next_prompt="", should_exit=True)
-
-    def do_web_scan(self, args, response):
-        tabs_only = args.get("tabs_only", False)
-        switch_tab_id = args.get("switch_tab_id", None)
-        text_only = args.get("text_only", False)
-        result = web_scan(
-            tabs_only=tabs_only,
-            switch_tab_id=switch_tab_id,
-            text_only=text_only,
-        )
-        content = result.pop("content", None)
-        yield f"[Info] {str(result)}\n"
-        if content:
-            result = json.dumps(result, ensure_ascii=False, default=json_default) + f"\n```html\n{content}\n```"
-        return StepOutcome(result, next_prompt="\n")
-
-    def do_web_execute_js(self, args, response):
-        script = args.get("script", "") or self._extract_code_block(response, "javascript")
-        if not script:
-            return StepOutcome(
-                "[Error] Script missing. Use ```javascript block or 'script' arg.",
-                next_prompt="\n",
-            )
-        abs_path = self._get_abs_path(script.strip())
-        if os.path.isfile(abs_path):
-            with open(abs_path, "r", encoding="utf-8") as handle:
-                script = handle.read()
-        save_to_file = args.get("save_to_file", "")
-        switch_tab_id = args.get("switch_tab_id") or args.get("tab_id")
-        no_monitor = args.get("no_monitor", False)
-        result = web_execute_js(script, switch_tab_id=switch_tab_id, no_monitor=no_monitor)
-        if save_to_file and "js_return" in result:
-            content = str(result["js_return"] or "")
-            abs_path = self._get_abs_path(save_to_file)
-            result["js_return"] = smart_format(content, max_str_len=170)
-            try:
-                with open(abs_path, "w", encoding="utf-8") as handle:
-                    handle.write(content)
-                result["js_return"] += f"\n\n[已保存完整内容到 {abs_path}]"
-            except Exception:
-                result["js_return"] += f"\n\n[保存失败，无法写入文件 {abs_path}]"
-        show = smart_format(
-            json.dumps(result, ensure_ascii=False, indent=2, default=json_default),
-            max_str_len=300,
-        )
-        yield f"JS 执行结果:\n{show}\n"
-        next_prompt = self._get_anchor_prompt(skip=args.get("_index", 0) > 0)
-        result = json.dumps(result, ensure_ascii=False, default=json_default)
-        return StepOutcome(smart_format(result, max_str_len=8000), next_prompt=next_prompt)
-
+    
     def do_file_patch(self, args, response):
         path = self._get_abs_path(args.get("path", ""))
         yield f"[Action] Patching file: {path}\n"

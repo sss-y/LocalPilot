@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from core.context import fix_messages
 from core.session import (
     ClaudeSession,
     LLMSession,
@@ -75,6 +76,18 @@ def make_cfg(stream=True):
     }
 
 
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "Read file",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+        },
+    }
+]
+
+
 def consume_generator(gen):
     chunks = []
     try:
@@ -142,6 +155,37 @@ class SessionLiteLLMTests(unittest.TestCase):
         self.assertEqual(converted[1]["role"], "user")
         self.assertEqual(converted[2]["role"], "tool")
         self.assertEqual(converted[2]["tool_call_id"], "t1")
+
+    def test_fix_messages_adds_missing_tool_result_before_user_text(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "call_1", "name": "read_file", "input": {"path": "a.py"}}
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "continue"}]},
+        ]
+
+        fixed = fix_messages(messages)
+
+        self.assertEqual(fixed[0]["role"], "user")
+        self.assertEqual(fixed[0]["content"][0]["type"], "tool_result")
+        self.assertEqual(fixed[0]["content"][0]["tool_use_id"], "call_1")
+        self.assertEqual(fixed[0]["content"][1]["text"], "continue")
+
+    def test_fix_messages_merges_adjacent_same_role_messages(self):
+        messages = [
+            {"role": "user", "content": [{"type": "text", "text": "first"}]},
+            {"role": "user", "content": [{"type": "text", "text": "second"}]},
+        ]
+
+        fixed = fix_messages(messages)
+
+        self.assertEqual(len(fixed), 1)
+        self.assertEqual(fixed[0]["role"], "user")
+        self.assertEqual(fixed[0]["content"][0]["text"], "first")
+        self.assertEqual(fixed[0]["content"][2]["text"], "second")
 
     def test_llm_session_raw_ask_streams_text_and_tool_blocks(self):
         fake_module = types.SimpleNamespace(
@@ -318,6 +362,145 @@ class SessionLiteLLMTests(unittest.TestCase):
         self.assertEqual(response.thinking, "think")
         self.assertEqual(response.tool_calls[0].function.name, "read_file")
         self.assertEqual(client._pending_tool_ids, ["tool_1"])
+
+    def test_native_claude_forwards_tools_to_litellm_completion(self):
+        captured = {}
+
+        def completion(**kwargs):
+            captured.update(kwargs)
+            return DummyResponse(DummyMessage(content="done"))
+
+        fake_module = types.SimpleNamespace(completion=completion)
+        backend = NativeClaudeSession(make_cfg(stream=False))
+        client = NativeToolClient(backend)
+
+        with patch.dict(sys.modules, {"litellm": fake_module}):
+            consume_generator(client.chat([{"role": "user", "content": "hello"}], tools=TOOLS))
+
+        self.assertEqual(captured["tools"], TOOLS)
+
+    def test_native_claude_forwards_system_prompt_to_litellm_completion(self):
+        captured = {}
+
+        def completion(**kwargs):
+            captured.update(kwargs)
+            return DummyResponse(DummyMessage(content="done"))
+
+        fake_module = types.SimpleNamespace(completion=completion)
+        backend = NativeClaudeSession(make_cfg(stream=False))
+        client = NativeToolClient(backend)
+
+        with patch.dict(sys.modules, {"litellm": fake_module}):
+            consume_generator(
+                client.chat(
+                    [
+                        {"role": "system", "content": "PROJECT SYSTEM"},
+                        {"role": "user", "content": "hello"},
+                    ]
+                )
+            )
+
+        system_message = captured["messages"][0]
+        system_content = system_message["content"]
+        self.assertEqual(system_message["role"], "system")
+        self.assertIn("PROJECT SYSTEM", system_content)
+        self.assertTrue(
+            "若用户需求未完成" in system_content
+            or "If the user's request is not yet complete" in system_content
+        )
+
+    def test_native_claude_round_trips_tool_call_and_result(self):
+        captured_calls = []
+
+        def completion(**kwargs):
+            captured_calls.append(kwargs)
+            if len(captured_calls) == 1:
+                return DummyResponse(
+                    DummyMessage(
+                        content="need tools",
+                        tool_calls=[
+                            DummyToolCall(
+                                id="call_1",
+                                name="read_file",
+                                arguments='{"path":"tools"}',
+                            )
+                        ],
+                    )
+                )
+            return DummyResponse(DummyMessage(content="done"))
+
+        fake_module = types.SimpleNamespace(completion=completion)
+        backend = NativeClaudeSession(make_cfg(stream=False))
+        client = NativeToolClient(backend)
+
+        with patch.dict(sys.modules, {"litellm": fake_module}):
+            _, first_response = consume_generator(
+                client.chat([{"role": "user", "content": "read tools"}], tools=TOOLS)
+            )
+            _, second_response = consume_generator(
+                client.chat(
+                    [
+                        {
+                            "role": "user",
+                            "content": "continue",
+                            "tool_results": [
+                                {"tool_use_id": "call_1", "content": "file content"}
+                            ],
+                        }
+                    ],
+                    tools=TOOLS,
+                )
+            )
+
+        self.assertEqual(first_response.tool_calls[0].function.name, "read_file")
+        self.assertEqual(second_response.content, "done")
+        second_messages = captured_calls[1]["messages"]
+        self.assertTrue(
+            any(
+                message.get("role") == "assistant"
+                and message.get("tool_calls")
+                and message["tool_calls"][0]["id"] == "call_1"
+                for message in second_messages
+            )
+        )
+        self.assertTrue(
+            any(
+                message.get("role") == "tool"
+                and message.get("tool_call_id") == "call_1"
+                and message.get("content") == "file content"
+                for message in second_messages
+            )
+        )
+
+    def test_native_claude_falls_back_to_text_tools_when_native_tools_rejected(self):
+        captured_calls = []
+
+        def completion(**kwargs):
+            captured_calls.append(kwargs)
+            if len(captured_calls) == 1:
+                raise Exception("tools[0]: unknown variant `custom`, expected `web_search_20250305`")
+            return DummyResponse(
+                DummyMessage(
+                    content=(
+                        '<summary>call read</summary>'
+                        '<tool_use>{"name":"read_file","arguments":{"path":"tools"}}</tool_use>'
+                    )
+                )
+            )
+
+        fake_module = types.SimpleNamespace(completion=completion)
+        backend = NativeClaudeSession(make_cfg(stream=False))
+        client = NativeToolClient(backend)
+
+        with patch.dict(sys.modules, {"litellm": fake_module}):
+            _, response = consume_generator(
+                client.chat([{"role": "user", "content": "read tools"}], tools=TOOLS)
+            )
+
+        self.assertEqual(captured_calls[0]["tools"], TOOLS)
+        self.assertNotIn("tools", captured_calls[1])
+        self.assertIn("<tool_use>", captured_calls[1]["messages"][0]["content"])
+        self.assertEqual(response.tool_calls[0].function.name, "read_file")
 
 
 if __name__ == "__main__":

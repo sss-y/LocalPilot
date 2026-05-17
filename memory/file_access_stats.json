@@ -1,0 +1,34 @@
+{
+  "memory_tools.py": {
+    "count": 3,
+    "last": "2026-05-17"
+  },
+  "plan_sop": {
+    "count": 1,
+    "last": "2026-05-17"
+  },
+  "plan_sop.md": {
+    "count": 17,
+    "last": "2026-05-17"
+  },
+  "subagent": {
+    "count": 1,
+    "last": "2026-05-17"
+  },
+  "subagent.md": {
+    "count": 9,
+    "last": "2026-05-17"
+  },
+  "verify_sop.md": {
+    "count": 4,
+    "last": "2026-05-17"
+  },
+  "global_mem.txt": {
+    "count": 1,
+    "last": "2026-05-17"
+  },
+  "supervisor_sop.md": {
+    "count": 1,
+    "last": "2026-05-17"
+  }
+}

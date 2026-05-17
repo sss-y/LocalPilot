@@ -284,6 +284,310 @@ def _build_content_blocks(text, reasoning, tool_blocks):
     return blocks
 
 
+def _text_from_content_item(item):
+    if item is None:
+        return ""
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        for key in ("text", "output_text", "input_text", "content", "output", "value"):
+            value = item.get(key)
+            if isinstance(value, str) and value:
+                return value
+    for attr in ("text", "output_text", "input_text", "content", "output", "value"):
+        value = getattr(item, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _collect_text_from_content(content):
+    if isinstance(content, str):
+        return content
+    texts = []
+    for item in content or []:
+        text = _text_from_content_item(item)
+        if text:
+            texts.append(text)
+    return "".join(texts)
+
+
+def _stringify_tool_result_content(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    return json.dumps(content, ensure_ascii=False) if isinstance(content, (dict, list)) else str(content or "")
+
+
+def _parse_jsonish_arguments(arguments):
+    if isinstance(arguments, dict):
+        return arguments
+    if not arguments:
+        return {}
+    try:
+        return json.loads(arguments)
+    except (TypeError, json.JSONDecodeError):
+        return {"raw_arguments": arguments}
+
+
+def _response_usage_dict(usage):
+    if usage is None:
+        return {}
+    if isinstance(usage, dict):
+        return usage
+    if hasattr(usage, "model_dump"):
+        try:
+            return usage.model_dump()
+        except TypeError:
+            pass
+    if hasattr(usage, "dict"):
+        try:
+            return usage.dict()
+        except TypeError:
+            pass
+    if hasattr(usage, "__dict__"):
+        return {k: v for k, v in vars(usage).items() if not k.startswith("_")}
+    return {"value": usage}
+
+
+def _response_to_raw_string(response):
+    if isinstance(response, str):
+        return response
+    if isinstance(response, dict):
+        return json.dumps(response, ensure_ascii=False, default=str)
+    if hasattr(response, "model_dump_json"):
+        try:
+            return response.model_dump_json()
+        except TypeError:
+            pass
+    if hasattr(response, "model_dump"):
+        try:
+            return json.dumps(response.model_dump(), ensure_ascii=False, default=str)
+        except TypeError:
+            pass
+    if hasattr(response, "dict"):
+        try:
+            return json.dumps(response.dict(), ensure_ascii=False, default=str)
+        except TypeError:
+            pass
+    return str(response)
+
+
+def _content_item_to_input_item(item):
+    if not isinstance(item, dict):
+        return None
+    item_type = item.get("type")
+    if item_type == "text":
+        text = item.get("text", "")
+        return {"type": "input_text", "text": text} if text else None
+    if item_type == "image_url":
+        return item
+    if item_type == "image":
+        src = item.get("source") or {}
+        if src.get("type") == "base64" and src.get("data"):
+            return {
+                "type": "input_image",
+                "image_url": f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}",
+            }
+    return None
+
+
+def _history_to_responses_input(messages):
+    items = []
+    for message in messages:
+        role = message.get("role")
+        blocks = message.get("content") or []
+        if not isinstance(blocks, list):
+            blocks = [{"type": "text", "text": str(blocks)}]
+        text_like = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if role == "assistant" and block_type == "tool_use":
+                if text_like:
+                    items.append({"role": "assistant", "content": list(text_like)})
+                    text_like = []
+                items.append(
+                    {
+                        "type": "function_call",
+                        "call_id": block.get("id", ""),
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(block.get("input", {}), ensure_ascii=False),
+                    }
+                )
+                continue
+            if role == "user" and block_type == "tool_result":
+                if text_like:
+                    items.append({"role": "user", "content": list(text_like)})
+                    text_like = []
+                items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": block.get("tool_use_id", ""),
+                        "output": _stringify_tool_result_content(block.get("content", "")),
+                    }
+                )
+                continue
+            if block_type == "thinking":
+                continue
+            mapped = _content_item_to_input_item(block)
+            if mapped:
+                text_like.append(mapped)
+        if text_like:
+            items.append({"role": role, "content": text_like})
+    return items
+
+
+def _iter_response_output_items(response):
+    if response is None:
+        return []
+    if isinstance(response, dict):
+        return response.get("output") or []
+    output = getattr(response, "output", None)
+    return output or []
+
+
+def _normalize_response_content_item(item):
+    if item is None:
+        return None
+    if isinstance(item, dict):
+        return item
+    data = {}
+    for key in ("type", "text", "output_text", "input_text"):
+        value = getattr(item, key, None)
+        if value is not None:
+            data[key] = value
+    if data:
+        return data
+    text = _text_from_content_item(item)
+    return {"type": "output_text", "text": text} if text else None
+
+
+def _normalize_response_output_item(item):
+    if item is None:
+        return None
+    if isinstance(item, dict):
+        return item
+    data = {}
+    for key in ("type", "id", "call_id", "name", "arguments", "summary", "content", "text"):
+        value = getattr(item, key, None)
+        if value is not None:
+            data[key] = value
+    content = data.get("content")
+    if isinstance(content, list):
+        normalized = []
+        for sub_item in content:
+            normalized_sub_item = _normalize_response_content_item(sub_item)
+            if normalized_sub_item:
+                normalized.append(normalized_sub_item)
+        data["content"] = normalized
+    elif content is not None:
+        text = _collect_text_from_content(content)
+        data["content"] = [{"type": "output_text", "text": text}] if text else []
+    return data or None
+
+
+def _responses_output_to_blocks(output_items):
+    normalized_items = []
+    text_parts = []
+    thinking_parts = []
+    tool_calls = []
+
+    for item in output_items or []:
+        normalized = _normalize_response_output_item(item)
+        if not normalized:
+            continue
+        normalized_items.append(normalized)
+        item_type = normalized.get("type")
+        if item_type == "function_call":
+            tool_calls.append(
+                MockToolCall(
+                    normalized.get("name", ""),
+                    _parse_jsonish_arguments(normalized.get("arguments", "")),
+                    id=normalized.get("call_id") or normalized.get("id", ""),
+                )
+            )
+            continue
+        if item_type == "reasoning":
+            summary = normalized.get("summary")
+            if isinstance(summary, list):
+                for part in summary:
+                    text = _text_from_content_item(part)
+                    if text:
+                        thinking_parts.append(text)
+            else:
+                text = _text_from_content_item(summary) or _text_from_content_item(normalized)
+                if text:
+                    thinking_parts.append(text)
+            continue
+
+        content = normalized.get("content")
+        if isinstance(content, list):
+            for content_item in content:
+                content_type = content_item.get("type")
+                text = _text_from_content_item(content_item)
+                if not text:
+                    continue
+                if content_type == "reasoning":
+                    thinking_parts.append(text)
+                else:
+                    text_parts.append(text)
+            continue
+
+        text = _text_from_content_item(normalized)
+        if text:
+            text_parts.append(text)
+
+    blocks = _build_content_blocks(
+        "".join(text_parts).strip(),
+        "\n".join(part.strip() for part in thinking_parts if part and part.strip()).strip(),
+        [{"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.args} for tc in tool_calls],
+    )
+    return {
+        "blocks": blocks,
+        "content": "\n".join(part for part in text_parts if part).strip(),
+        "thinking": "\n".join(part.strip() for part in thinking_parts if part and part.strip()).strip(),
+        "tool_calls": tool_calls,
+        "normalized_output": normalized_items,
+    }
+
+
+def _text_tool_instruction(tools):
+    tools_json = json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
+    return (
+        "\n\n### Tool calling fallback\n"
+        "Native tool calling is unavailable for this provider. If a tool is needed, "
+        "output one or more tool calls exactly as:\n"
+        '<tool_use>{"name":"tool_name","arguments":{...}}</tool_use>\n'
+        "Then stop and wait for tool results.\n"
+        f"Available tools:\n{tools_json}\n"
+    )
+
+
+def _messages_with_text_tool_instruction(messages, tools):
+    instruction = _text_tool_instruction(tools)
+    if messages and messages[0].get("role") == "system":
+        first = dict(messages[0])
+        first["content"] = str(first.get("content", "")) + instruction
+        return [first] + list(messages[1:])
+    return [{"role": "system", "content": instruction.strip()}] + list(messages)
+
+
+def _is_native_tool_rejection(exc):
+    text = str(exc)
+    return (
+        "tools[0]" in text
+        and "unknown variant" in text
+        and ("custom" in text or "web_search" in text)
+    )
+
+
 def _litellm_completion_kwargs(sess, messages):
     kwargs = {
         "model": _litellm_model_name(sess),
@@ -303,6 +607,9 @@ def _litellm_completion_kwargs(sess, messages):
         kwargs["reasoning_effort"] = sess.reasoning_effort
     if sess.service_tier:
         kwargs["service_tier"] = sess.service_tier
+    tools = getattr(sess, "tools", None)
+    if tools:
+        kwargs["tools"] = tools
     if sess.stream:
         kwargs["stream_options"] = {"include_usage": True}
     return kwargs
@@ -375,8 +682,18 @@ def _litellm_raw_ask(sess, messages):
     try:
         response = completion(**kwargs)
     except Exception as exc:
-        yield f"!!!Error: {exc}"
-        return []
+        if kwargs.get("tools") and _is_native_tool_rejection(exc):
+            fallback_messages = _messages_with_text_tool_instruction(messages, kwargs["tools"])
+            fallback_kwargs = _litellm_completion_kwargs(sess, fallback_messages)
+            fallback_kwargs.pop("tools", None)
+            try:
+                response = completion(**fallback_kwargs)
+            except Exception as retry_exc:
+                yield f"!!!Error: {retry_exc}"
+                return []
+        else:
+            yield f"!!!Error: {exc}"
+            return []
 
     return (yield from _yield_from_litellm_response(sess, response))
 
@@ -417,7 +734,7 @@ class BaseSession:
         self.system = ""
         self.name = cfg.get("name", self.model)
         self.provider = cfg.get("provider")
-        self.custom_llm_provider = cfg.get("custom_llm_provider")
+        self.custom_llm_provider = cfg.get("custom_llm_provider")# provider 用来链接?router?
         self.max_retries = max(0, int(cfg.get("max_retries", 4)))
         self.stream = cfg.get("stream", True)
         self.read_timeout = max(5, int(cfg.get("read_timeout", 30 if self.stream else 240)))
@@ -429,6 +746,7 @@ class BaseSession:
         self.max_tokens = cfg.get("max_tokens")
         self.logger = LLMLogger()
         self.last_usage = None
+        # 将session属性重新构建,并设置client值,同时
         self.tools = None
 
     def ask(self, prompt):
@@ -476,15 +794,171 @@ class LLMSession(BaseSession):
         return _msgs_claude2oai(raw_list)
 
 
-class NativeOAISession(LLMSession):
-    def raw_ask(self, messages):
-        return (yield from _litellm_raw_ask(self, _msgs_claude2oai(_ensure_thinking_blocks(messages, self.model))))
+class NativeOAISession(BaseSession):
+    def make_messages(self, raw_list):
+        return [{"role": item["role"], "content": list(item["content"])} for item in raw_list]
+
+    def _prepare_responses_tools(self):
+        return self.tools or None
+
+    def _build_query_from_history(self, history):
+        fixed = _fix_messages(self.make_messages(history))
+        fixed = _ensure_thinking_blocks(fixed, self.model)
+        query = {
+            "model": _litellm_model_name(self),
+            "input": _history_to_responses_input(fixed),
+            "api_key": self.api_key,
+            "api_base": self.api_base,
+            "stream": self.stream,
+            "timeout": self.read_timeout,
+        }
+        if self.system:
+            query["instructions"] = self.system
+        tools = self._prepare_responses_tools()
+        if tools:
+            query["tools"] = tools
+        if self.temperature is not None:
+            query["temperature"] = self.temperature
+        if self.max_tokens is not None:
+            query["max_output_tokens"] = self.max_tokens
+        if self.max_retries is not None:
+            query["num_retries"] = self.max_retries
+        if self.reasoning_effort:
+            query["reasoning_effort"] = self.reasoning_effort
+        if self.service_tier:
+            query["service_tier"] = self.service_tier
+        return query
+
+    def raw_ask(self, query):
+        try:
+            import litellm
+        except ImportError:
+            yield "!!!Error: litellm is not installed"
+            return {"output": []}
+
+        responder = getattr(litellm, "responses", None) or getattr(litellm, "response", None)
+        if responder is None:
+            yield "!!!Error: litellm.responses is not available"
+            return {"output": []}
+
+        try:
+            response = responder(**query)
+        except Exception as exc:
+            yield f"!!!Error: {exc}"
+            return {"output": []}
+
+        if not self.stream:
+            usage = getattr(response, "usage", None) if not isinstance(response, dict) else response.get("usage")
+            usage_dict = _response_usage_dict(usage)
+            if usage_dict:
+                self.last_usage = usage_dict
+                logging.info("[Usage] %s", usage_dict)
+            text = _responses_output_to_blocks(_iter_response_output_items(response)).get("content", "")
+            if text:
+                yield text
+            return response
+
+        output_items = []
+        usage_dict = {}
+        for chunk in response:
+            if isinstance(chunk, dict) and chunk.get("output"):
+                output_items.extend(chunk.get("output") or [])
+            chunk_output = getattr(chunk, "output", None)
+            if chunk_output:
+                output_items.extend(chunk_output)
+
+            usage = getattr(chunk, "usage", None) if not isinstance(chunk, dict) else chunk.get("usage")
+            parsed_usage = _response_usage_dict(usage)
+            if parsed_usage:
+                usage_dict = parsed_usage
+                self.last_usage = parsed_usage
+                logging.info("[Usage] %s", parsed_usage)
+
+            delta_text = ""
+            if isinstance(chunk, dict):
+                delta_text = (
+                    chunk.get("output_text")
+                    or chunk.get("delta")
+                    or chunk.get("text")
+                    or chunk.get("content", "")
+                )
+            else:
+                for attr in ("output_text", "delta", "text"):
+                    value = getattr(chunk, attr, None)
+                    if isinstance(value, str) and value:
+                        delta_text = value
+                        break
+                if not delta_text:
+                    delta_text = _collect_text_from_content(getattr(chunk, "content", None))
+            if delta_text:
+                yield delta_text
+
+        return {"output": output_items, "usage": usage_dict}
+
+    def _normalize_responses_response(self, response):
+        usage = {}
+        if isinstance(response, dict):
+            usage = _response_usage_dict(response.get("usage"))
+        else:
+            usage = _response_usage_dict(getattr(response, "usage", None))
+        if usage:
+            self.last_usage = usage
+
+        parsed = _responses_output_to_blocks(_iter_response_output_items(response))
+        blocks = parsed["blocks"]
+        content = parsed["content"]
+        tool_calls = parsed["tool_calls"]
+        thinking = parsed["thinking"]
+        if not tool_calls:
+            tool_calls, content = _parse_text_tool_calls(content)
+        if not thinking:
+            thinking, content = extract_thinking(content)
+        if not blocks and content:
+            blocks = [{"type": "text", "text": content}]
+        return {
+            "assistant_blocks": blocks,
+            "content": content,
+            "thinking": thinking,
+            "tool_calls": tool_calls,
+            "usage": usage or self.last_usage or {},
+            "raw": _response_to_raw_string(response),
+        }
+
+    def ask(self, msg):
+        assert isinstance(msg, dict)
+        with self.lock:
+            self.history.append(msg)
+            trim_messages_history(self.history, self.context_win)
+            query = self._build_query_from_history(self.history)
+        gen = self.raw_ask(query)
+        response = None
+        try:
+            while True:
+                yield next(gen)
+        except StopIteration as stop:
+            response = stop.value
+        normalized = self._normalize_responses_response(response)
+        blocks = normalized["assistant_blocks"]
+        if blocks and not (
+            len(blocks) == 1 and blocks[0].get("text", "").startswith("!!!Error:")
+        ):
+            self.history.append({"role": "assistant", "content": blocks})
+        return MockResponse(
+            thinking=normalized["thinking"],
+            content=normalized["content"],
+            tool_calls=normalized["tool_calls"],
+            raw=normalized["raw"],
+            usage=normalized["usage"],
+        )
 
 
 class NativeClaudeSession(BaseSession):
     def raw_ask(self, messages):
         fixed = _ensure_thinking_blocks(_drop_unsigned_thinking(_fix_messages(messages)), self.model)
-        return (yield from _litellm_raw_ask(self, _msgs_claude2oai(fixed)))
+        completion_messages = _msgs_claude2oai(fixed)
+        if self.system:
+            completion_messages = [{"role": "system", "content": self.system}] + completion_messages
+        return (yield from _litellm_raw_ask(self, completion_messages))
 
     def ask(self, msg):
         assert isinstance(msg, dict)

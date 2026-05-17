@@ -168,7 +168,7 @@ def fix_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             if orphan: m = {**m, 'content': [{"type":"text","text":str(b.get('content',''))} if isinstance(b,dict) and b.get('type')=='tool_result' and b.get('tool_use_id') in orphan else b for b in _wrap(m['content'])]}
         fixed.append(m)
     while fixed and fixed[0]['role'] != 'user': fixed.pop(0)
-    return messages
+    return fixed
 
 # 针对消息发送的模块,后续可能移动到session模块中
 def _keep_claude_block(b): return not isinstance(b, dict) or b.get("type") != "thinking" or b.get("signature")

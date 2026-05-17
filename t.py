@@ -15,7 +15,7 @@ import os
 
 from core.config import reload_mykeys
 from core.context import estimate_context_cost
-from core.session import NativeClaudeSession, NativeToolClient
+from core.session import NativeClaudeSession, NativeOAISession, NativeToolClient
 
 
 TOOLS = [
@@ -50,6 +50,24 @@ class InspectNativeSession(NativeClaudeSession):
             if block.get("type") == "text" and block.get("text"):
                 yield block["text"]
         return blocks
+
+
+class InspectNativeOAISession(NativeOAISession):
+    def __init__(self, cfg, scripted_responses):
+        super().__init__(cfg)
+        self.scripted_responses = [copy.deepcopy(resp) for resp in scripted_responses]
+        self.observed_queries = []
+        self._turn_index = 0
+
+    def raw_ask(self, query):
+        self.observed_queries.append(copy.deepcopy(query))
+        idx = min(self._turn_index, len(self.scripted_responses) - 1)
+        response = copy.deepcopy(self.scripted_responses[idx])
+        self._turn_index += 1
+        parsed = self._normalize_responses_response(response)
+        if parsed["content"]:
+            yield parsed["content"]
+        return response
 
 
 def assert_true(cond, msg):
@@ -192,12 +210,121 @@ def run_real_model_smoke(base_cfg):
     print("  log =", client.logger.log_path())
 
 
+def run_native_oai_responses_flow_test(base_cfg):
+    backend = InspectNativeOAISession(
+        base_cfg,
+        scripted_responses=[
+            {
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "summary": [{"type": "summary_text", "text": "先读两个文件"}],
+                    },
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "need tools"}],
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "read_file",
+                        "arguments": '{"path":"a.py"}',
+                    },
+                    {
+                        "type": "function_call",
+                        "call_id": "call_2",
+                        "name": "read_file",
+                        "arguments": '{"path":"b.py"}',
+                    },
+                ],
+                "usage": {"total_tokens": 11},
+            },
+            {
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "merged ok"}],
+                    }
+                ],
+                "usage": {"total_tokens": 7},
+            },
+        ],
+    )
+    client = NativeToolClient(backend)
+
+    first_gen = client.chat(
+        [{"role": "user", "content": "先决定是否需要工具"}],
+        tools=TOOLS,
+    )
+    try:
+        while True:
+            next(first_gen)
+    except StopIteration as stop:
+        first_resp = stop.value
+
+    assert_true(first_resp.content == "need tools", "first turn content mismatch")
+    assert_true(first_resp.thinking == "先读两个文件", "first turn thinking mismatch")
+    assert_true(len(first_resp.tool_calls) == 2, "first turn should produce two tool calls")
+    assert_true(client._pending_tool_ids == ["call_1", "call_2"], "pending ids should be recorded")
+
+    second_gen = client.chat(
+        [
+            {
+                "role": "user",
+                "content": "工具结果已返回，请继续",
+                "tool_results": [{"tool_use_id": "call_1", "content": "a.py content"}],
+            }
+        ],
+        tools=TOOLS,
+    )
+    try:
+        while True:
+            next(second_gen)
+    except StopIteration as stop:
+        second_resp = stop.value
+
+    second_query = backend.observed_queries[-1]
+    second_input = second_query["input"]
+    assert_true(second_query.get("instructions") == backend.system, "system prompt should be forwarded")
+    assert_true(second_query.get("tools") == TOOLS, "tools should be forwarded into responses query")
+    assert_true(
+        any(item.get("type") == "function_call" and item.get("call_id") == "call_1" for item in second_input),
+        "assistant function_call should be preserved in history-derived query",
+    )
+    assert_true(
+        any(item.get("type") == "function_call_output" and item.get("call_id") == "call_1" for item in second_input),
+        "resolved tool_result should become function_call_output",
+    )
+    assert_true(
+        any(item.get("type") == "function_call_output" and item.get("call_id") == "call_2" and item.get("output") == "" for item in second_input),
+        "missing blank function_call_output for unresolved pending id",
+    )
+    assert_true(second_resp.content == "merged ok", "second turn content mismatch")
+    assert_true(backend.history[-1]["role"] == "assistant", "assistant response should be appended to history")
+    assert_true(
+        any(
+            any(block.get("type") == "tool_use" and block.get("id") == "call_1" for block in message.get("content", []))
+            for message in backend.history
+            if message.get("role") == "assistant"
+        ),
+        "first assistant tool_use blocks should stay in history",
+    )
+
+    print("[PASS] native_oai_responses_flow")
+    print("  pending_after_turn1 =", [tool.id for tool in first_resp.tool_calls])
+    print("  second_query_items =", len(second_input))
+    print("  second_response =", second_resp.content)
+
+
 def main():
     mykeys, _ = reload_mykeys()
     cfg = mykeys["native_claude_dash_config"]
 
     run_history_trim_test(cfg)
     run_multi_tag_merge_test(cfg)
+    run_native_oai_responses_flow_test(cfg)
 
     if os.environ.get("ENABLE_REAL_MODEL_SMOKE") == "1":
         run_real_model_smoke(cfg)
