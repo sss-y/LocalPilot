@@ -8,7 +8,7 @@ Hooks only via monkey-patch so core files stay untouched:
 import threading, sys
 
 try:
-    from llmcore import _load_mykeys
+    from core.llmcore import _load_mykeys
     _cfg = _load_mykeys().get('langfuse_config')
     from langfuse import Langfuse
     _lf = Langfuse(**_cfg) if _cfg else None
@@ -16,7 +16,7 @@ except Exception:
     _lf = None
 
 if _lf:
-    import llmcore, agent_loop
+    import core.llmcore as llmcore, agent_loop
     _tls = threading.local()
 
     _orig_log = llmcore._write_llm_log

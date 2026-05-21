@@ -13,6 +13,7 @@ def get_pretty_json(data):
         data = data.copy(); data["script"] = data["script"].replace("; ", ";\n  ")
     return json.dumps(data, indent=2, ensure_ascii=False).replace('\\n', '\n')
 
+# client中保存的全局历史,handler中保存每轮工具调用历史的summary->history_infor和key_infor:前几轮的长期记忆;
 def agent_runner_loop(client, system_prompt, user_input, handler, tools_schema, max_turns=40, verbose=True, initial_user_content=None):
     messages = [
         {"role": "system", "content": system_prompt},
@@ -43,6 +44,7 @@ def agent_runner_loop(client, system_prompt, user_input, handler, tools_schema, 
             if cleaned: yield cleaned + '\n'
 
         # tool加载
+        # 在no_tool中定义了退出情况
         if not response.tool_calls: tool_calls = [{'tool_name': 'no_tool', 'args': {}}]
         else: tool_calls = [{'tool_name': tc.function.name, 'args': json.loads(tc.function.arguments), 'id': tc.id}
                           for tc in response.tool_calls]
@@ -56,6 +58,7 @@ def agent_runner_loop(client, system_prompt, user_input, handler, tools_schema, 
             else: 
                 if verbose: yield f"🛠️ Tool: `{tool_name}`  📥 args:\n````text\n{get_pretty_json(args)}\n````\n"
                 else: yield f"🛠️ {tool_name}({_compact_tool_args(tool_name, args)})\n\n\n"
+            
             handler.current_turn = turn
             gen = handler.dispatch(tool_name, args, response, index=ii)
             # 如果是verbose模式，工具执行的过程和结果都会被逐步输出；如果不是verbose模式，则直接执行工具并获取最终结果，不展示中间过程。
@@ -66,12 +69,18 @@ def agent_runner_loop(client, system_prompt, user_input, handler, tools_schema, 
                 outcome = (yield from proxy()) if verbose else exhaust(proxy())
                 if verbose: yield '`````\n'
             except StopIteration as e: outcome = e.value
-            
+
+            # 正确退出
+            # 调用ask_user
             if outcome.should_exit: 
                 exit_reason = {'result': 'EXITED', 'data': outcome.data}; break
+            # 如果返回的next_prompt是空或none,任务完成,退出agent_loop返回结果
             if not outcome.next_prompt: 
                 exit_reason = {'result': 'CURRENT_TASK_DONE', 'data': outcome.data}; break
+            
+            # 发现出现调用位置工具,重置client中的 tools
             if outcome.next_prompt.startswith('未知工具'): client.last_tools = ''
+
             if outcome.data is not None and tool_name != 'no_tool': 
                 datastr = json.dumps(outcome.data, ensure_ascii=False, default=json_default) if type(outcome.data) in [dict, list] else str(outcome.data) 
                 tool_results.append({'tool_use_id': tid, 'content': datastr})
@@ -80,15 +89,16 @@ def agent_runner_loop(client, system_prompt, user_input, handler, tools_schema, 
         # 如果无新的prompt或工具调用结果指示退出，则结束当前任务的循环；
         # 否则将新的prompt加入消息列表，继续下一轮对话。    
         if len(next_prompts) == 0 or exit_reason:
-            # todo 留存设置执行reflect 模式下的sop注入的done_hook中的下一个任务,能够自主执行,直到任务结束
+            # 由自主执行sop注入,通过coderun注入:重读自主任务sop，检查你刚刚的收尾工作是否正确，不正确则改正
             if len(handler._done_hooks) == 0 or exit_reason.get('result', '') == 'EXITED': break
             next_prompts.add(handler._done_hooks.pop(0))
-        
+        # 每轮结束时,更新工作记忆、在prompt中注入干预提示
         next_prompt = handler.turn_end_callback(response, tool_calls, tool_results, turn, '\n'.join(next_prompts), exit_reason)
         messages = [{"role": "user", "content": next_prompt, "tool_results": tool_results}]   # just new message, history is kept in *Session
     
-    # 超过最大轮数限制后，如果没有其他退出原因，则默认以'MAX_TURNS_EXCEEDED'作为退出原因结束循环。
+    # 当启用了ask_user或者no_tools时会
     if exit_reason: handler.turn_end_callback(response, tool_calls, tool_results, turn, '', exit_reason)
+    # 如果超过最大轮数,且无其他退出原因,设置成'MAX_TURNS_EXCEEDED'
     return exit_reason or {'result': 'MAX_TURNS_EXCEEDED'}
 
 def _clean_content(text):

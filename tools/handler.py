@@ -57,7 +57,11 @@ class GenericAgentHandler(BaseHandler):
         content = getattr(response, "content", "") or ""
         matches = re.findall(rf"```(?:{code_type})\n(.*?)\n```", content, re.DOTALL)
         return matches[-1].strip() if matches else None
-
+    '''
+    函数
+    1. 改变agent状态的code_run:使用内联执行
+    2. 普通的code_run:调用code_run工具执行代码片段
+    '''
     def do_code_run(self, args, response):
         """Execute code or shell snippets."""
         code_type = args.get("type", "python")
@@ -73,7 +77,10 @@ class GenericAgentHandler(BaseHandler):
         raw_path = os.path.join(self.cwd, args.get("cwd", "./"))
         cwd = os.path.normpath(os.path.abspath(raw_path))
         code_cwd = os.path.normpath(self.cwd)
+        # 如果
         if code_type == "python" and args.get("inline_eval"):
+            # 注入handler和client对象,使代码可以直接控制对象内部的属性,或者调用对象的方法
+            # 用于更新key_infor或者注入done_hook等需要直接控制handler状态的情况
             namespace = {"handler": self, "parent": self.parent}
             old_cwd = os.getcwd()
             try:
@@ -83,6 +90,7 @@ class GenericAgentHandler(BaseHandler):
                         result = repr(eval(code, namespace))
                     except SyntaxError:
                         exec(code, namespace)
+                        # 约定使用namespace["_r"]来存储结果,如果没有则默认返回"OK"
                         result = namespace.get("_r", "OK")
                 except Exception as exc:
                     result = f"Error: {exc}"
@@ -107,6 +115,10 @@ class GenericAgentHandler(BaseHandler):
         yield "Waiting for your answer ...\n"
         return StepOutcome(result, next_prompt="", should_exit=True)
     
+    '''函数
+    1. 如果错误,返回错误信息
+    2. 如果成功,将result转换成字符串返回,并构造next_prompt提示用户下一步
+    '''
     def do_file_patch(self, args, response):
         path = self._get_abs_path(args.get("path", ""))
         yield f"[Action] Patching file: {path}\n"
@@ -122,6 +134,12 @@ class GenericAgentHandler(BaseHandler):
         next_prompt = self._get_anchor_prompt(skip=args.get("_index", 0) > 0)
         return StepOutcome(result, next_prompt=next_prompt)
 
+    '''函数
+    1. 提取回复中的file_content标签中的内容
+    2. 支持引用文件内容的占位符展开
+    3. 三种模式的写文件：覆盖、追加、前置
+    捕捉异常结果作为result,注入到outcome中返回
+    '''
     def do_file_write(self, args, response):
         path = self._get_abs_path(args.get("path", ""))
         mode = args.get("mode", "overwrite")
@@ -166,6 +184,14 @@ class GenericAgentHandler(BaseHandler):
             yield f"[Status] ❌ 写入异常: {exc}\n"
             return StepOutcome({"status": "error", "msg": str(exc)}, next_prompt="\n")
 
+    '''函数:读取文件内容
+    1. 返回的result中指明文件读取的指标信息
+        1. 截断提示
+        2. 展示行号的提示
+    2. 超过max_str_len的部分进行智能截断,保留头尾内容,中间用提示字符串连接
+    3. 如果是记忆文件,添加log,记录访问统计
+    4. 如果是记忆文件或者sop文件,在next_prompt中添加提示,提醒提取关键点更新working memory
+    '''
     def do_file_read(self, args, response):
         path = self._get_abs_path(args.get("path", ""))
         yield f"\n[Action] Reading file: {path}\n"
@@ -173,14 +199,18 @@ class GenericAgentHandler(BaseHandler):
         count = args.get("count", 200)
         keyword = args.get("keyword")
         show_linenos = args.get("show_linenos", True)
+
         result = file_read(path, start=start, keyword=keyword, count=count, show_linenos=show_linenos)
         if show_linenos and not result.startswith("Error:"):
             result = "由于设置了show_linenos，以下返回信息为：(行号|)内容 。\n" + result
         if " ... [TRUNCATED]" in result:
             result += "\n\n（某些行被截断，如需完整内容可改用 code_run 读取）"
+        
         result = smart_format(result, max_str_len=20000, omit_str="\n\n[omitted long content]\n\n")
         next_prompt = self._get_anchor_prompt(skip=args.get("_index", 0) > 0)
+
         log_memory_access(path)
+
         if "memory" in path or "sop" in path:
             next_prompt += "\n[SYSTEM TIPS] 正在读取记忆或SOP文件，若决定按sop执行请提取sop中的关键点（特别是靠后的）update working memory."
         return StepOutcome(result, next_prompt=next_prompt)
@@ -206,20 +236,32 @@ class GenericAgentHandler(BaseHandler):
         next_prompt = self._get_anchor_prompt(skip=args.get("_index", 0) > 0)
         return StepOutcome({"result": "working key_info updated"}, next_prompt=next_prompt)
 
+    '''
+    函数:无工具调用下的处理
+    1. 空字符:超出三次退出,否则构造prompt要求重试
+    2. 流异常中断或错误提示:构造prompt要求重试
+    3. 回复超出token限制:构造prompt要求分步执行
+    4. plan模式下完成声明但未执行验证步骤的拦截:构造prompt要求先执行验证步骤
+    5. 回复中出现较大代码块疑似调用代码但未调用工具的拦截:构造prompt要求明确是否需要执行并调用工具或者补充自然语言说明
+    6. 正常完成任务:返回结果,并将next_prompt设置为None以指示任务完成
+    '''
     def do_no_tool(self, args, response):
         content = getattr(response, "content", "") or ""
         thinking = getattr(response, "thinking", "") or ""
+        # 空回复处理
         if not response or (not content.strip() and not thinking.strip()):
             self._empty_ct = getattr(self, "_empty_ct", 0) + 1
             if self._empty_ct >= 3:
                 return StepOutcome({}, should_exit=True)
             yield "[Warn] LLM returned an empty response. Retrying...\n"
             return StepOutcome({}, next_prompt="[System] Blank response, regenerate and tooluse")
+        # 回复中出现流中断或者错误
         if len(content) > 50 and ("[!!! 流异常中断" in content[-100:] or "!!!Error:" in content[-100:]):
             return StepOutcome({}, next_prompt="[System] Incomplete response. Regenerate and tooluse.")
+        # 回复超出token限制
         if "max_tokens !!!]" in content[-100:]:
             return StepOutcome({}, next_prompt="[System] max_tokens limit reached. Use multi small steps to do it.")
-
+        # plan模式下,回复内容中出现完成声明但未执行验证步骤的拦截
         if self._in_plan_mode() and any(keyword in content for keyword in ["任务完成", "全部完成", "已完成所有", "🏁"]):
             if "VERDICT" not in content and "[VERIFY]" not in content and "验证subagent" not in content:
                 yield "[Warn] Plan模式完成声明拦截。\n"
@@ -227,17 +269,20 @@ class GenericAgentHandler(BaseHandler):
                     {},
                     next_prompt="⛔ [验证拦截] 检测到你在plan模式下声称完成，但未执行[VERIFY]验证步骤。请先按plan_sop §四启动验证subagent，获得VERDICT后才能声称完成。",
                 )
-
+        # 回复中出现超过50字符的代码块并且只有单块的大代码,怀疑是调用代码但是没有run_code工具调用
         code_block_pattern = r"```[a-zA-Z0-9_]*\n[\s\S]{50,}?```"
         blocks = re.findall(code_block_pattern, content)
         if len(blocks) == 1:
+
             match = re.search(code_block_pattern, content)
             after_block = content[match.end():]
             if not after_block.strip():
+                # 除去思考和总结标签的内容
                 residual = content.replace(match.group(0), "")
                 residual = re.sub(r"<thinking>[\s\S]*?</thinking>", "", residual, flags=re.IGNORECASE)
                 residual = re.sub(r"<summary>[\s\S]*?</summary>", "", residual, flags=re.IGNORECASE)
                 clean_residual = re.sub(r"\s+", "", residual)
+                # prompt提示
                 if len(clean_residual) <= 30:
                     yield "[Info] Detected large code block without tool call and no extra natural language. Requesting clarification.\n"
                     next_prompt = (
@@ -248,7 +293,8 @@ class GenericAgentHandler(BaseHandler):
                         "并明确是否还需要额外的实际操作。"
                     )
                     return StepOutcome({}, next_prompt=next_prompt)
-
+        
+        # 正常完成任务,返回结果,并将next_prompt设置为None以指示任务完成
         if self._in_plan_mode():
             remaining = self._check_plan_completion()
             if remaining == 0:
@@ -258,11 +304,21 @@ class GenericAgentHandler(BaseHandler):
         yield "[Info] Final response to user.\n"
         return StepOutcome(response, next_prompt=None)
 
+    # 构建修改长期记忆的prompt
+    # 返回memory_management_sop中的内容
     def do_start_long_term_update(self, args, response):
         prompt, result = build_long_term_update()
         yield "[Info] Start distilling good memory for long-term storage.\n"
         return StepOutcome(result, next_prompt=prompt)
 
+    '''
+    函数:构造新一轮对话的prompt
+    1. 添加工作记忆:截取后40条历史对话小结
+    2. 添加当前轮数
+    3. 添加长期记忆:注入key_info
+    4. 添加文件读取提示:提醒再次读取相关文件
+    返回值:构造好的prompt
+    '''
     def _get_anchor_prompt(self, skip=False):
         if skip:
             return "\n"
@@ -280,6 +336,13 @@ class GenericAgentHandler(BaseHandler):
                 pass
         return prompt
 
+    '''
+    函数:
+    1. 更新history_info:将每轮的对话回复的summary添加到history_info中,作为工作记忆
+    2. 更新key_info:将文件中的重要的长期信息总结注入到key_info中
+    3. 更新prompt:根据turns进行边界提醒,添加文件中的干预提示
+    返回值:新的prompt
+    '''
     def turn_end_callback(self, response, tool_calls, tool_results, turn, next_prompt, exit_reason):
         content = getattr(response, "content", "") or ""
         stripped = re.sub(r"```.*?```|<thinking>.*?</thinking>", "", content, flags=re.DOTALL)
@@ -318,10 +381,13 @@ class GenericAgentHandler(BaseHandler):
         task_dir = getattr(self.parent, "task_dir", None)
         injected_key_info = consume_file(task_dir, "_keyinfo")
         injected_prompt = consume_file(task_dir, "_intervene")
+        # 总结工作记忆的关键点注入key_info
         if injected_key_info:
             self.working["key_info"] = self.working.get("key_info", "") + f"\n[MASTER] {injected_key_info}"
+        # 注入干预提示
         if injected_prompt:
             next_prompt += f"\n\n[MASTER] {injected_prompt}\n"
-        for hook in getattr(self.parent, "_turn_end_hooks", {}).values():
-            hook(locals())
+        # 前端相关,暂时不做处理
+        # for hook in getattr(self.parent, "_turn_end_hooks", {}).values():
+        #     hook(locals())
         return next_prompt

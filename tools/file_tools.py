@@ -12,7 +12,9 @@ from typing import Generator
 
 _read_dirs: set[str] = set()
 
-
+'''函数:展开形如{{file:path:start:end}}的文件内容
+如果不包含,则直接返回原文本
+'''
 def expand_file_refs(text: str, base_dir: str | None = None) -> str:
     """Expand {{file:path:start:end}} references into actual file content."""
     pattern = r"\{\{file:(.+?):(\d+):(\d+)\}\}"
@@ -30,7 +32,13 @@ def expand_file_refs(text: str, base_dir: str | None = None) -> str:
 
     return re.sub(pattern, replacer, text)
 
-
+'''函数:替换内容
+1. 如果文件不存在,返回错误信息
+2. 如果文件存在,但未找到old_content,返回错误信息
+3. 如果找到多个old_content,返回错误信息
+4. 如果old_content为空,返回错误信息
+5. 如果成功替换,返回成功信息
+'''
 def file_patch(path: str, old_content: str, new_content: str) -> dict:
     """Replace a unique text block in a file."""
     abs_path = str(Path(path).resolve())
@@ -76,7 +84,16 @@ def _scan_files(base: str, depth: int = 2) -> Generator[tuple[str, str], None, N
     except (PermissionError, OSError):
         return
 
-
+'''函数:读取文件内容,支持返回行号,和关键词读取
+1. 如果指定了关键词,返回关键词所在行以及前后各100行的内容,如果没有找到关键词,则返回指定行开始的内容
+2. 如果文件不存在,尝试在前两级目录中寻找文件,选出相似度大于0.6的,并返回候选列表
+3. 再返回内容之前进行过长截断和总行数统计;
+    1. 截断:将每行的长度控制在100-8000之间,超过部分用... [TRUNCATED]替代;
+    2. 统计:向后统计至多5000行
+4. 最终返回:总行数统计+当前行数+提示信息+读取的内容:[FILE] {total_lines_str} lines"
+                + (f" | PARTIAL showing {real_count}; assess need for more" if partial else "")
+                + "\n"
+'''
 def file_read(
     path: str,
     start: int = 1,
@@ -88,6 +105,7 @@ def file_read(
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             stream = ((i, line.rstrip("\r\n")) for i, line in enumerate(handle, 1))
             stream = itertools.dropwhile(lambda item: item[0] < start, stream)
+            
             if keyword:
                 before = collections.deque(maxlen=count // 3)
                 for i, line in stream:
@@ -105,6 +123,7 @@ def file_read(
                     )
             else:
                 res = list(itertools.islice(stream, count))
+            # 截断处理
             real_count = len(res)
             max_len = min(max(100, 256000 // max(real_count, 1)), 8000)
             tag = " ... [TRUNCATED]"
@@ -127,6 +146,7 @@ def file_read(
             return result
     except FileNotFoundError:
         msg = f"Error: File not found: {path}"
+        # 尝试在传入的父目录中寻找
         try:
             target = os.path.basename(path)
             scan_root = os.path.dirname(os.path.dirname(os.path.abspath(path)))
@@ -149,6 +169,7 @@ def file_read(
                 msg += "\n\nDid you mean:\n" + "\n".join(
                     f"  {candidate[1]}  ({score:.0%})" for score, candidate in top
                 )
+        # 如果发生异常,返回原始file not found消息,不影响主流程
         except Exception:
             pass
         return msg

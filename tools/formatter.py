@@ -22,7 +22,10 @@ def format_error(exc: BaseException) -> str:
             )
     return f"{type(exc).__name__}: {exc}"
 
-
+'''函数:智能截断长字符串
+1. 如果字符串长度超过max_str_len,则保留头部和尾部各max_str_len//2长度的内容,中间用omit_str连接
+2. 如果字符串长度不超过max_str_len,则直接返回原字符串
+'''
 def smart_format(data: Any, max_str_len: int = 100, omit_str: str = " ... ") -> str:
     """Truncate long values by keeping the head and tail."""
     text = data if isinstance(data, str) else str(data)

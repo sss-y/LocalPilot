@@ -9,7 +9,7 @@ elif hasattr(sys.stderr, 'reconfigure'): sys.stderr.reconfigure(errors='replace'
 # 将项目根路径添加到sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from llmcore import reload_mykeys, LLMSession, ToolClient, ClaudeSession, MixinSession, NativeToolClient, NativeClaudeSession, NativeOAISession
+from core.llmcore import reload_mykeys, LLMSession, ToolClient, ClaudeSession, MixinSession, NativeToolClient, NativeClaudeSession, NativeOAISession
 
 # from core.config import reload_mykeys
 # from core.session import (
@@ -175,6 +175,7 @@ class GeneraticAgent:
                 handler.working['passed_sessions'] = ps = self.handler.working.get('passed_sessions', 0) + 1
                 if ps > 0: handler.working['key_info'] += f'\n[SYSTEM] 此为 {ps} 个对话前设置的key_info，若已在新任务，先更新或清除工作记忆。\n'
             self.handler = handler
+
             # although new handler, the **full** history is in llmclient, so it is full history!
             gen = agent_runner_loop(self.llmclient, sys_prompt, raw_query, 
                                 handler, TOOLS_SCHEMA, max_turns=70, verbose=self.verbose)
@@ -208,7 +209,7 @@ class GeneraticAgent:
                     #with self.task_queue.mutex: self.task_queue.queue.clear()
                 self.is_running = self.stop_sig = False
                 self.task_queue.task_done()
-                # 设置handler为停止,一个task对应一个handler,这里在结束任务之后,开启新的任务;
+                # 设置handler为停止,一个task对应一个handler,这里在结束任务之后,开启新的任务;,
                 if self.handler is not None: self.handler.code_stop_signal.append(1)
 
 
@@ -287,7 +288,7 @@ if __name__ == '__main__':
             if os.path.getmtime(args.reflect) != _mt:
                 try: spec.loader.exec_module(mod); _mt = os.path.getmtime(args.reflect); print('[Reflect] reloaded')
                 except Exception as e: print(f'[Reflect] reload error: {e}')
-            time.sleep(getattr(mod, 'INTERVAL', 5))
+            time.sleep(getattr(mod, 'INTERVAL', 5))# 设置轮训检查的时间间隔,默认5s
 
             # 对应:reflect文件夹下的scheduler里的check函数和autonomouse里的check函数
             try: task = mod.check()

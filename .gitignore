@@ -7,3 +7,9 @@ __pycache__/
 *.pyc
 temp/
 .vscode
+docs/
+tests/
+sche_tasks/
+t.py
+memory/L4_raw_sessions/2026-05.zip
+memory/L4_raw_sessions/all_histories.txt

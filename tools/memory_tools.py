@@ -29,7 +29,7 @@ def get_global_memory() -> str:
         pass
     return prompt
 
-
+# 记录对memory文件的访问,统计访问次数和最后访问日期,保存在memory/file_access_stats.json中,用于分析哪些记忆文件被频繁访问,哪些可能过时未被使用
 def log_memory_access(path: str) -> None:
     """Track reads/writes for memory files."""
     if "memory" not in path:

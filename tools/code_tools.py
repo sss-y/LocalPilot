@@ -44,6 +44,8 @@ def code_run(
         tmp_path = tmp_file.name
         tmp_file.close()
         cmd = [sys.executable, "-X", "utf8", "-u", tmp_path]
+
+    
     elif code_type in {"powershell", "bash", "sh", "shell", "ps1", "pwsh"}:
         if os.name == "nt":
             cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", code]
@@ -82,9 +84,10 @@ def code_run(
             startupinfo=startupinfo,
         )
         start_t = time.time()
+        # 启动线程读取输出流
         reader = threading.Thread(target=stream_reader, args=(process, stdout_parts), daemon=True)
         reader.start()
-
+        # 监控读线程,超时或者用户打断直接杀死进程
         while reader.is_alive():
             is_timeout = time.time() - start_t > timeout
             if is_timeout or stop_signal:
