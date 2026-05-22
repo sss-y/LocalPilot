@@ -100,6 +100,7 @@ def compress_history_tags(
     return messages
 
 
+
 def sanitize_leading_user_msg(msg: Dict[str, Any]) -> Dict[str, Any]:
     """
     当裁剪后首条消息含孤立 tool_result 时，将其转成纯文本，避免消息协议非法。
