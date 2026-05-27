@@ -1,4 +1,4 @@
-"""core.logging
+"""core.mylogging
 
 职责：
 - 为当前进程生成统一日志文件路径
@@ -12,10 +12,12 @@ import os
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from config.paths import MODEL_RESPONSES_DIR
+
 
 class LLMLogger:
-    def __init__(self, log_dir: str = "temp/model_responses"):
-        self.log_dir = log_dir
+    def __init__(self, log_dir: str | os.PathLike[str] = MODEL_RESPONSES_DIR):
+        self.log_dir = os.fspath(log_dir)
         os.makedirs(self.log_dir, exist_ok=True)
 
     def log_path(self) -> str:
@@ -33,3 +35,8 @@ class LLMLogger:
         if not usage:
             return
         self.write("Usage", f"[{source}] {usage}")
+
+
+def _write_llm_log(label: str, content: str) -> None:
+    """Compatibility function matching the legacy core.llmcore log format."""
+    LLMLogger().write(label, content)

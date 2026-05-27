@@ -12,18 +12,10 @@ _PROJECT_ROOT_FOR_IMPORT = str(Path(__file__).resolve().parents[1])
 if _PROJECT_ROOT_FOR_IMPORT not in sys.path:
     sys.path.append(_PROJECT_ROOT_FOR_IMPORT)
 
-from core.llmcore import reload_mykeys, LLMSession, ToolClient, ClaudeSession, MixinSession, NativeToolClient, NativeClaudeSession, NativeOAISession
+from core.client import NativeToolClient, ToolClient
+from core.config import reload_mykeys
+from core.session import ClaudeSession, LLMSession, MixinSession, NativeClaudeSession, NativeOAISession
 
-# from core.config import reload_mykeys
-# from core.session import (
-#     LLMSession,
-#     ToolClient,
-#     ClaudeSession,
-#     MixinSession,
-#     NativeToolClient,
-#     NativeClaudeSession,
-#     NativeOAISession,
-# )
 from agent.agent_loop import agent_runner_loop
 from config.paths import ASSETS_DIR, MEMORY_DIR, PROJECT_ROOT, REFLECT_LOG_DIR, TEMP_DIR, TOOLS_DIR, task_dir
 from tools import AgentHandler, smart_format, get_global_memory, format_error, consume_file

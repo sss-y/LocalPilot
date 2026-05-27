@@ -2,13 +2,13 @@
 
 Hooks only via monkey-patch so core files stay untouched:
 - agent_loop.agent_runner_loop        -> outer agent trace (parent of all below)
-- llmcore._write_llm_log              -> generation span (Prompt=start, Response=end)
+- client._write_llm_log               -> generation span (Prompt=start, Response=end)
 - BaseHandler.tool_before/after       -> tool span
 """
 import threading, sys
 
 try:
-    from core.llmcore import _load_mykeys
+    from core.config import _load_mykeys
     _cfg = _load_mykeys().get('langfuse_config')
     from langfuse import Langfuse
     _lf = Langfuse(**_cfg) if _cfg else None
@@ -16,10 +16,10 @@ except Exception:
     _lf = None
 
 if _lf:
-    import core.llmcore as llmcore, agent.agent_loop as agent_loop
+    import core.client as client, core.session as session, agent.agent_loop as agent_loop
     _tls = threading.local()
 
-    _orig_log = llmcore._write_llm_log
+    _orig_log = client._write_llm_log
     def _patched_log(label, content):
         try:
             if label == 'Prompt':
@@ -30,7 +30,7 @@ if _lf:
                 _tls.gen.end(); _tls.gen = None
         except Exception: pass
         return _orig_log(label, content)
-    llmcore._write_llm_log = _patched_log
+    client._write_llm_log = _patched_log
 
     def _extract_usage(buf):
         u = {}
@@ -76,8 +76,8 @@ if _lf:
             except Exception: pass
             return ret
         return wrapped
-    llmcore._parse_claude_sse = _wrap_parser(llmcore._parse_claude_sse)
-    llmcore._parse_openai_sse = _wrap_parser(llmcore._parse_openai_sse)
+    session._parse_claude_sse = _wrap_parser(session._parse_claude_sse)
+    session._parse_openai_sse = _wrap_parser(session._parse_openai_sse)
 
     _orig_before = agent_loop.BaseHandler.tool_before_callback
     _orig_after = agent_loop.BaseHandler.tool_after_callback
