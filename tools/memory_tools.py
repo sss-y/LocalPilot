@@ -5,11 +5,15 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
-from pathlib import Path
 
+from config.paths import (
+    GLOBAL_MEMORY_INSIGHT_PATH,
+    MEMORY_ACCESS_STATS_PATH,
+    MEMORY_MANAGEMENT_SOP_PATH,
+    TEMP_DIR,
+    insight_structure_path,
+)
 from .file_tools import file_read
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def get_global_memory() -> str:
@@ -17,11 +21,9 @@ def get_global_memory() -> str:
     prompt = "\n"
     try:
         suffix = "_en" if os.environ.get("GA_LANG", "") == "en" else ""
-        insight_path = PROJECT_ROOT / "memory" / "global_mem_insight.txt"
-        structure_path = PROJECT_ROOT / "assets" / f"insight_fixed_structure{suffix}.txt"
-        insight = insight_path.read_text(encoding="utf-8", errors="replace")
-        structure = structure_path.read_text(encoding="utf-8")
-        prompt += f"cwd = {PROJECT_ROOT / 'temp'} (./)\n"
+        insight = GLOBAL_MEMORY_INSIGHT_PATH.read_text(encoding="utf-8", errors="replace")
+        structure = insight_structure_path(suffix).read_text(encoding="utf-8")
+        prompt += f"cwd = {TEMP_DIR} (./)\n"
         prompt += "\n[Memory] (../memory)\n"
         prompt += structure + "\n../memory/global_mem_insight.txt:\n"
         prompt += insight + "\n"
@@ -34,9 +36,8 @@ def log_memory_access(path: str) -> None:
     """Track reads/writes for memory files."""
     if "memory" not in path:
         return
-    stats_file = PROJECT_ROOT / "memory" / "file_access_stats.json"
     try:
-        stats = json.loads(stats_file.read_text(encoding="utf-8"))
+        stats = json.loads(MEMORY_ACCESS_STATS_PATH.read_text(encoding="utf-8"))
     except Exception:
         stats = {}
     file_name = os.path.basename(path)
@@ -44,8 +45,8 @@ def log_memory_access(path: str) -> None:
         "count": stats.get(file_name, {}).get("count", 0) + 1,
         "last": datetime.now().strftime("%Y-%m-%d"),
     }
-    stats_file.parent.mkdir(parents=True, exist_ok=True)
-    stats_file.write_text(json.dumps(stats, indent=2, ensure_ascii=False), encoding="utf-8")
+    MEMORY_ACCESS_STATS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    MEMORY_ACCESS_STATS_PATH.write_text(json.dumps(stats, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def do_update_working_checkpoint(
@@ -76,9 +77,8 @@ def do_start_long_term_update() -> tuple[str, str]:
         "**操作**：严格遵循提供的L0的记忆更新SOP。先 `file_read` 看现有 → 判断类型 → 最小化更新 → 无新内容跳过，保证对记忆库最小局部修改。\n\n"
         + get_global_memory()
     )
-    sop_path = PROJECT_ROOT / "memory" / "memory_management_sop.md"
-    if sop_path.exists():
-        result = "自动读取L0内容：\n" + file_read(str(sop_path), show_linenos=False)
+    if MEMORY_MANAGEMENT_SOP_PATH.exists():
+        result = "自动读取L0内容：\n" + file_read(str(MEMORY_MANAGEMENT_SOP_PATH), show_linenos=False)
     else:
         result = "Memory Management SOP not found. Do not update memory."
     return prompt, result

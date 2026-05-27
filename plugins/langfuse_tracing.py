@@ -16,7 +16,7 @@ except Exception:
     _lf = None
 
 if _lf:
-    import core.llmcore as llmcore, agent_loop
+    import core.llmcore as llmcore, agent.agent_loop as agent_loop
     _tls = threading.local()
 
     _orig_log = llmcore._write_llm_log

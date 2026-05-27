@@ -1,6 +1,14 @@
 import os, json, time as _time, socket as _socket, logging, importlib.util
 from datetime import datetime, timedelta
 
+from config.paths import (
+    L4_COMPRESSOR_PATH,
+    MODEL_RESPONSES_DIR,
+    SCHEDULER_LOG_PATH,
+    SCHE_TASKS_DIR,
+    SCHE_TASKS_DONE_DIR,
+)
+
 
 # 端口锁：防止重复启动，bind失败时agentmain会直接崩溃退出
 # reload时mod.__dict__保留_lock，跳过重复绑定
@@ -17,11 +25,10 @@ if '_lock' not in globals():
 INTERVAL = 120
 ONCE = False
 
-_dir = os.path.dirname(os.path.abspath(__file__))
-TASKS = os.path.join(_dir, '../sche_tasks')
-DONE  = os.path.join(_dir, '../sche_tasks/done')
-_LOG  = os.path.join(_dir, '../sche_tasks/scheduler.log')
-_L4_COMPRESSOR = os.path.normpath(os.path.join(_dir, '../memory/L4_raw_sessions/compress_session.py'))
+TASKS = str(SCHE_TASKS_DIR)
+DONE = str(SCHE_TASKS_DONE_DIR)
+_LOG = str(SCHEDULER_LOG_PATH)
+_L4_COMPRESSOR = str(L4_COMPRESSOR_PATH)
 os.makedirs(os.path.dirname(_LOG), exist_ok=True)
 
 # --- 日志 ---
@@ -83,8 +90,7 @@ def check():
         _l4_t = _time.time()
         try:
             batch_process = _load_l4_batch_process()
-            raw_dir = os.path.join(_dir, '../temp/model_responses')
-            r = batch_process(raw_dir, dry_run=False)
+            r = batch_process(str(MODEL_RESPONSES_DIR), dry_run=False)
             print(f'[L4 cron] {r}')
         except Exception as e:
             _logger.error(f'L4 archive failed: {e}')

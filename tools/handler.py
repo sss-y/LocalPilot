@@ -6,6 +6,8 @@ import json
 import os
 import re
 
+from config.paths import TEMP_DIR
+
 from .base import BaseHandler, StepOutcome
 from .code_tools import code_run
 from .file_tools import consume_file, expand_file_refs, file_patch, file_read
@@ -29,13 +31,13 @@ def json_default(obj):
     return list(obj) if isinstance(obj, set) else str(obj)
 
 
-class GenericAgentHandler(BaseHandler):
+class AgentHandler(BaseHandler):
     """Concrete tool handler used by the agent loop."""
 
-    def __init__(self, parent, last_history=None, cwd="./temp"):
+    def __init__(self, parent, last_history=None, cwd=None):
         self.parent = parent
         self.working = {}
-        self.cwd = cwd
+        self.cwd = str(TEMP_DIR if cwd is None else cwd)
         self.current_turn = 0
         self.history_info = last_history if last_history else []
         self.code_stop_signal = []

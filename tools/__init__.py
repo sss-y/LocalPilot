@@ -4,7 +4,7 @@ from .base import BaseHandler, StepOutcome, try_call_generator
 from .code_tools import code_run
 from .file_tools import _scan_files, consume_file, expand_file_refs, file_patch, file_read
 from .formatter import format_error, smart_format
-from .handler import GenericAgentHandler
+from .handler import AgentHandler
 from .human_tools import ask_user
 from .memory_tools import (
     do_start_long_term_update,
@@ -29,7 +29,7 @@ __all__ = [
     "ask_user",
     "code_run",
     "consume_file",
-    "GenericAgentHandler",
+    "AgentHandler",
     "do_start_long_term_update",
     "do_update_working_checkpoint",
     "enter_plan_mode",

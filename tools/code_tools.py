@@ -9,12 +9,11 @@ import sys
 import tempfile
 import threading
 import time
-from pathlib import Path
 from typing import Generator, Iterable
 
-from .formatter import smart_format
+from config.paths import TEMP_DIR
 
-SCRIPT_DIR = Path(__file__).resolve().parent.parent
+from .formatter import smart_format
 
 
 def code_run(
@@ -28,7 +27,7 @@ def code_run(
     """Run code and stream lightweight progress logs."""
     stop_signal = stop_signal if stop_signal is not None else []
     preview = (code[:60].replace("\n", " ") + "...") if len(code) > 60 else code.strip()
-    run_cwd = cwd or str(SCRIPT_DIR / "temp")
+    run_cwd = cwd or str(TEMP_DIR)
     tmp_path: str | None = None
     yield f"[Action] Running {code_type} in {os.path.basename(run_cwd)}: {preview}\n"
 

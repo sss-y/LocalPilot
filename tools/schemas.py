@@ -5,9 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-TOOLS_DIR = Path(__file__).resolve().parent
-TOOLS_SCHEMA_PATH = TOOLS_DIR / "tools_schema.json"
-TOOLS_SCHEMA_CN_PATH = TOOLS_DIR / "tools_schema_cn.json"
+from config.paths import TOOLS_SCHEMA_CN_PATH, TOOLS_SCHEMA_PATH
 
 
 def load_tool_schema(path: str | Path) -> list[dict]:

@@ -1,5 +1,6 @@
 import os, json, re, time, requests, sys, threading, urllib3, base64, importlib, uuid
 from datetime import datetime
+from config.paths import TEMP_DIR
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 _RESP_CACHE_KEY = str(uuid.uuid4())
 
@@ -905,7 +906,7 @@ def _parse_text_tool_calls(content):
     return tcs, content
 
 def _write_llm_log(label, content):
-    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp/model_responses')
+    log_dir = os.path.join(TEMP_DIR, 'model_responses')
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f'model_responses_{os.getpid()}.txt')
     ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -1037,5 +1038,4 @@ class NativeToolClient:
         if resp: _write_llm_log('Response', resp.raw)
         if resp and hasattr(resp, 'tool_calls') and resp.tool_calls: self._pending_tool_ids = [tc.id for tc in resp.tool_calls]
         return resp
-
 
