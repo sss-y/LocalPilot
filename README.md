@@ -21,6 +21,7 @@ LocalPilot 当前优先保证“本地通用 Agent 的任务闭环”可用，�
 - **上下文与记忆**：`core/context.py` 处理历史裁剪和工具消息修复；`memory/` 保存全局记忆、SOP 和历史会话压缩流程。
 - **任务模式**：`--task` 把输入和输出落盘到 `temp/<task>/`，适合被脚本、调度器或其他本地系统调用。
 - **计划与反射**：Plan / Verify SOP 支撑复杂任务拆解；`--reflect` 可加载定时或自主触发脚本。
+- **结构化日志与异常恢复**：`core/observability.py` 为每次用户可见任务生成 `run_id`，把任务、模型请求、工具调用、异常和耗时写入 JSONL。
 - **可选观测**：配置 `langfuse_config` 后会尝试启用 `plugins/langfuse_tracing.py`。
 
 ## 工作方式
@@ -36,11 +37,16 @@ flowchart TD
     S -->|任务完成| O[终端回复 / output.txt / reflect log]
     L --> C[上下文裁剪与模型日志]
     C --> S
+    L --> J[JSONL 事件日志 / run_id]
+    T --> J
+    S --> J
     L --> P[Plan / Verify SOP]
     P --> L
 ```
 
 一次任务通常会经历多轮：模型先生成回复或工具调用，工具把真实执行结果回灌给模型，Agent 再根据结果继续读取、修改、运行、验证或结束。
+
+每次用户输入、task 轮次或 reflect 触发都会生成一个新的 `run_id`。同一任务内的 LLM turn、工具调用、retry、异常和任务结束事件都会挂在这个 `run_id` 下，方便用 `rg <run_id> temp/logs` 串起一次执行。
 
 需要注意：Agent 工具的默认工作目录是 `temp/`。如果任务要操作项目根目录文件，请在提示中明确路径，例如 `../README.md` 或绝对路径。
 
@@ -147,6 +153,37 @@ python runagent.py --task demo --bg --input "检查 tools 目录里的工具能�
 
 后台模式会打印 PID，标准输出和错误日志写入 `temp/demo/stdout.log` 与 `temp/demo/stderr.log`。
 
+### 异常处理与结构化日志
+
+LocalPilot 默认把可排障事件写入按天切分的 JSON Lines 文件：
+
+```text
+temp/logs/agent-YYYY-MM-DD.jsonl
+```
+
+事件日志面向本地排障，不替代 `temp/model_responses/` 的模型原文日志。JSONL 默认只保存摘要和元数据，例如 `event`、`run_id`、`component`、`turn`、`tool_name`、耗时、状态码、错误类型和短消息；不全量记录 prompt、文件内容、工具结果或完整模型回复。异常事件会记录 `exc_type`、`exc_msg`、`traceback`、`recoverable` 和 `user_visible_msg`。
+
+常见事件包括：
+
+- `task_start` / `task_end` / `task_failed`：任务级生命周期。
+- `llm_turn_start` / `llm_turn_end` / `llm_turn_exception`：Agent Loop 视角的模型轮次。
+- `llm_request_start` / `llm_request_retry` / `llm_request_end` / `llm_request_error` / `llm_usage`：模型请求、重试和用量。
+- `tool_start` / `tool_end` / `tool_exception` / `tool_bad_args` / `tool_unknown`：工具分发和工具异常。
+
+日志等级默认写入 `info` 及以上。需要更多细节时可以设置：
+
+```bash
+LOCALPILOT_LOG_LEVEL=debug python runagent.py
+LOCALPILOT_LOG_STDERR=1 python runagent.py
+```
+
+异常处理采用分层策略：
+
+- 工具执行中的普通异常会被 `tools/base.py` 捕获，写入 `tool_exception`，并转成可恢复的 `StepOutcome` 返回给模型继续修正。
+- LLM 网络超时、连接错误和可重试 HTTP 状态会按 session 配置重试，并写入 request retry/error 事件。
+- 任务级未捕获异常会结束当前任务，用户输出只展示短错误，完整 traceback 进入 JSONL。
+- `KeyboardInterrupt` 和 `SystemExit` 不会被工具层吞掉，仍交给外层中止流程处理。
+
 ### 复杂任务计划
 
 可以直接用自然语言要求 Agent 先计划再执行：
@@ -198,12 +235,12 @@ python runagent.py --reflect reflect/autonomous.py
 ```text
 agentmain.py        # 根入口，转发到 agent.agentmain
 agent/              # CLI 主程序与 Agent Loop
-core/               # 模型会话、上下文裁剪、配置和日志
-tools/              # Agent 可调用工具与 JSON schema
+core/               # 模型会话、上下文裁剪、配置、模型原文日志和 JSONL 观测
+tools/              # Agent 可调用工具、工具分发基类与 JSON schema
 memory/             # 全局记忆、SOP、历史会话压缩
 reflect/            # 定时任务和自主触发脚本
 sche_tasks/         # scheduler 扫描的任务配置与完成报告
-temp/               # task 输出、模型日志、临时工作目录
+temp/               # task 输出、模型日志、JSONL 事件日志、临时工作目录
 assets/             # 系统提示词和记忆模板
 plugins/            # 可选插件，例如 Langfuse tracing
 tests/              # 当前测试集合，仍在随重构收敛
@@ -243,7 +280,8 @@ langfuse_config = {
 ## 安全边界
 
 - 不要提交真实 API key、cookie 或私有模型网关地址；`mykey.py` 和 `core/mykey.json` 都应按敏感配置处理。
-- `temp/`、`temp/model_responses/`、task 输出和 reflect 日志可能包含提示词、工具结果、文件内容和调研结论，分享前需要清理。
+- `temp/`、`temp/model_responses/`、`temp/logs/`、task 输出和 reflect 日志可能包含提示词摘要、工具结果、文件内容、错误信息和调研结论，分享前需要清理。
+- JSONL 事件日志会对常见敏感字段名做基础脱敏，并截断普通字符串，但不能替代正式的密钥扫描或数据治理。
 - Agent 可以读写文件、应用补丁并执行代码。建议只在可信工作区运行，并在提示中明确操作范围。
 - Reflect 和定时任务会长期执行自然语言任务，启用前请检查 `reflect/` 脚本、`sche_tasks/` 配置和报告写入路径。
 
@@ -258,6 +296,8 @@ langfuse_config = {
 | Agent Loop | 已接入 | 支持多轮模型响应、工具调用、结果回灌和退出控制。 |
 | 文件与代码工具 | 已接入 | 覆盖文件读写、补丁、Python / shell 执行和用户询问。 |
 | 上下文与记忆 | 已接入 | 支持上下文裁剪、全局记忆注入和模型日志记录。 |
+| 结构化日志 | 已接入 | `temp/logs/agent-YYYY-MM-DD.jsonl` 按 `run_id` 串联任务、turn、request、tool 和异常事件。 |
+| 异常恢复 | 已接入 | 工具异常局部恢复；模型请求保留 retry；任务级异常输出短错误并记录 traceback。 |
 | Plan / Verify SOP | 已有流程 | 面向复杂任务，依赖 Agent 按 SOP 执行。 |
 | Reflect / Scheduler | 已接入 | 适合本地定时任务和长期运行流程。 |
 | Langfuse tracing | 可选 | 有配置时尝试启用，不作为核心依赖。 |

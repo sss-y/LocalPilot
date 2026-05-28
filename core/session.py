@@ -10,6 +10,7 @@ from core.context import (
     trim_messages_history as _trim_messages_history,
 )
 from core.mylogging import _write_llm_log
+from core.observability import content_summary, log_event, log_exception, summarize, url_host
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 _RESP_CACHE_KEY = str(uuid.uuid4())
 __all__ = [
@@ -240,6 +241,7 @@ def _parse_openai_sse(resp_lines, api_mode="chat_completions"):
 
 def _record_usage(usage, api_mode):
     if not usage: return
+    log_event("llm_usage", component="session", api_mode=api_mode, usage=summarize(usage))
     if api_mode == 'responses':
         cached = (usage.get("input_tokens_details") or {}).get("cached_tokens", 0)
         inp = usage.get("input_tokens", 0)
@@ -301,6 +303,17 @@ def _stream_with_retry(sess, url, headers, payload, parse_fn):
         try: ra = float((resp.headers or {}).get("retry-after"))
         except: ra = None
         return max(0.5, ra if ra is not None else min(30.0, 1.5 * (2 ** attempt)))
+    request_started = time.perf_counter()
+    request_meta = {
+        "component": "session",
+        "session": type(sess).__name__,
+        "model": getattr(sess, "model", None),
+        "api_mode": getattr(sess, "api_mode", "messages"),
+        "stream": getattr(sess, "stream", None),
+        "host": url_host(url),
+        "max_retries": getattr(sess, "max_retries", None),
+    }
+    log_event("llm_request_start", **request_meta)
     for attempt in range(sess.max_retries + 1):
         streamed = False
         try:
@@ -309,25 +322,78 @@ def _stream_with_retry(sess, url, headers, payload, parse_fn):
                 if r.status_code >= 400:
                     if r.status_code in _RETRYABLE and attempt < sess.max_retries:
                         d = _delay(r, attempt)
+                        log_event(
+                            "llm_request_retry",
+                            level="warning",
+                            attempt=attempt + 1,
+                            delay_seconds=round(d, 2),
+                            status_code=r.status_code,
+                            **request_meta,
+                        )
                         print(f"[LLM Retry] HTTP {r.status_code}, retry in {d:.1f}s ({attempt+1}/{sess.max_retries+1})")
                         time.sleep(d); continue
                     try: body = r.text.strip()[:500]
                     except: body = ""
                     err = f"!!!Error: HTTP {r.status_code}" + (f": {body}" if body else "")
+                    log_event(
+                        "llm_request_error",
+                        level="error",
+                        attempt=attempt + 1,
+                        status_code=r.status_code,
+                        response_body=content_summary(body, max_len=300),
+                        user_visible_msg=content_summary(err, max_len=300),
+                        duration_ms=round((time.perf_counter() - request_started) * 1000, 2),
+                        **request_meta,
+                    )
                     yield err; return [{"type": "text", "text": err}]
                 gen = parse_fn(r)
                 try:
                     while True: streamed = True; yield next(gen)
-                except StopIteration as e: return e.value or []
+                except StopIteration as e:
+                    log_event(
+                        "llm_request_end",
+                        attempt=attempt + 1,
+                        status_code=r.status_code,
+                        duration_ms=round((time.perf_counter() - request_started) * 1000, 2),
+                        **request_meta,
+                    )
+                    return e.value or []
         except (requests.Timeout, requests.ConnectionError) as e:
             err = f"!!!Error: {type(e).__name__}"
             if attempt < sess.max_retries:
                 d = _delay(None, attempt)
+                log_event(
+                    "llm_request_retry",
+                    level="warning",
+                    attempt=attempt + 1,
+                    delay_seconds=round(d, 2),
+                    error_type=type(e).__name__,
+                    **request_meta,
+                )
                 print(f"[LLM Retry] {type(e).__name__}, retry in {d:.1f}s ({attempt+1}/{sess.max_retries+1})")
                 yield err; time.sleep(d); continue
+            log_exception(
+                "llm_request_error",
+                e,
+                recoverable=True,
+                user_visible_msg=err,
+                attempt=attempt + 1,
+                duration_ms=round((time.perf_counter() - request_started) * 1000, 2),
+                **request_meta,
+            )
             yield err; return [{"type": "text", "text": err}]
         except Exception as e:
             err = f"\n\n[!!! 流异常中断 {type(e).__name__}: {e} !!!]" if streamed else f"!!!Error: {type(e).__name__}: {e}"
+            log_exception(
+                "llm_request_error",
+                e,
+                recoverable=True,
+                user_visible_msg=content_summary(err, max_len=300),
+                streamed=streamed,
+                attempt=attempt + 1,
+                duration_ms=round((time.perf_counter() - request_started) * 1000, 2),
+                **request_meta,
+            )
             yield err; return [{"type": "text", "text": err}]
 
 def _openai_stream(sess, messages):

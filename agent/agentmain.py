@@ -14,6 +14,7 @@ if _PROJECT_ROOT_FOR_IMPORT not in sys.path:
 
 from core.client import NativeToolClient, ToolClient
 from core.config import reload_mykeys
+from core.observability import content_summary, current_run_id, log_event, log_exception, new_run_context, reset_run_context
 from core.session import ClaudeSession, LLMSession, MixinSession, NativeClaudeSession, NativeOAISession
 
 from agent.agent_loop import agent_runner_loop
@@ -115,9 +116,15 @@ class MyAgent:
         self.stop_sig = True
         if self.handler is not None: self.handler.code_stop_signal.append(1)
             
-    def put_task(self, query, source="user", images=None):
+    def put_task(self, query, source="user", images=None, metadata=None):
         display_queue = queue.Queue()
-        self.task_queue.put({"query": query, "source": source, "images": images or [], "output": display_queue})
+        self.task_queue.put({
+            "query": query,
+            "source": source,
+            "images": images or [],
+            "metadata": metadata or {},
+            "output": display_queue,
+        })
         return display_queue
 
 # 支持以"/"开头的特殊命令,如/session.{key}={value}设置会话属性,/resume恢复最近会话记录等,处理完后返回新的查询字符串或None表示命令已处理无需继续
@@ -153,11 +160,30 @@ class MyAgent:
     def run(self):
         while True:
             task = self.task_queue.get()
-            raw_query, source, images, display_queue = task["query"], task["source"], task.get("images") or [], task["output"]
+            raw_query, source, images, metadata, display_queue = (
+                task["query"],
+                task["source"],
+                task.get("images") or [],
+                task.get("metadata") or {},
+                task["output"],
+            )
             raw_query = self._handle_slash_cmd(raw_query, display_queue)
             if raw_query is None:
                 self.task_queue.task_done(); continue
+            run_token = new_run_context(
+                source,
+                source=source,
+                task_dir=metadata.get("task_dir"),
+                round=metadata.get("round"),
+                reflect_script=metadata.get("reflect_script"),
+            )
             self.is_running = True
+            log_event(
+                "task_start",
+                component="agentmain",
+                query=content_summary(raw_query, max_len=240),
+                image_count=len(images),
+            )
             # 截断query过长部分,并替换掉换行以免显示问题,同时记录历史
             rquery = smart_format(raw_query.replace('\n', ' '), max_str_len=200)
             self.history.append(f"[USER]: {rquery}")
@@ -196,18 +222,36 @@ class MyAgent:
                 if '</file_content>' in full_resp: full_resp = re.sub(r'<file_content>\s*(.*?)\s*</file_content>', r'\n````\n<file_content>\n\1\n</file_content>\n````', full_resp, flags=re.DOTALL)    
 
                 display_queue.put({'done': full_resp, 'source': source})
+                log_event(
+                    "task_end",
+                    component="agentmain",
+                    result="success",
+                    response=content_summary(full_resp, max_len=240),
+                    history_len=len(handler.history_info),
+                )
                 self.history = handler.history_info# 将handler里记录的历史更新到agent的历史属性,以便后续任务使用(ga.py中)
             except Exception as e:
-                print(f"Backend Error: {format_error(e)}")
-                display_queue.put({'done': full_resp + f'\n```\n{format_error(e)}\n```', 'source': source})
+                short_error = format_error(e)
+                log_exception(
+                    "task_failed",
+                    e,
+                    recoverable=False,
+                    user_visible_msg=short_error,
+                    component="agentmain",
+                    run_id=current_run_id(),
+                )
+                print(f"Backend Error: {short_error}")
+                display_queue.put({'done': full_resp + f'\n```\n{short_error}\n```', 'source': source})
             finally:
                 if self.stop_sig:
+                    log_event("task_aborted", level="warning", component="agentmain")
                     print('User aborted the task.')
                     #with self.task_queue.mutex: self.task_queue.queue.clear()
                 self.is_running = self.stop_sig = False
                 self.task_queue.task_done()
                 # 设置handler为停止,一个task对应一个handler,这里在结束任务之后,开启新的任务;,
                 if self.handler is not None: self.handler.code_stop_signal.append(1)
+                reset_run_context(run_token)
 
 
 # 主程序入口，解析命令行参数，支持一次性任务模式（通过文件IO）和反射模式（加载监控脚本），并启动agent的运行循环
@@ -255,7 +299,7 @@ if __name__ == '__main__':
         # 读取infile文件中的内容
         with open(infile, encoding='utf-8') as f: raw = f.read()
         while True:
-            dq = agent.put_task(raw, source='task')
+            dq = agent.put_task(raw, source='task', metadata={"task_dir": args.task, "round": nround or 0})
             while 'done' not in (item := dq.get(timeout=120)): 
                 if 'next' in item and random.random() < 0.95:  # 概率写一次中间结果
                     # 将中间结果写入到当前轮次的文件夹中
@@ -293,7 +337,7 @@ if __name__ == '__main__':
                 print(f'[Reflect] check() error: {e}'); continue
             if task is None: continue
             print(f'[Reflect] triggered: {task[:80]}')
-            dq = agent.put_task(task, source='reflect')
+            dq = agent.put_task(task, source='reflect', metadata={"reflect_script": args.reflect})
             try:
                 while 'done' not in (item := dq.get(timeout=120)): pass
                 result = item['done']

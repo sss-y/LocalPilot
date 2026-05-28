@@ -1,4 +1,6 @@
-import json, re, os
+import json, re, os, time
+
+from core.observability import content_summary, log_event, log_exception, summarize
 
 def json_default(obj):
     return list(obj) if isinstance(obj, set) else str(obj)
@@ -32,22 +34,74 @@ def agent_runner_loop(client, system_prompt, user_input, handler, tools_schema, 
 
         if turn%10 == 0: client.last_tools = ''  # 每10轮重置一次工具描述，避免上下文过大导致的模型性能下降
 
+        backend = getattr(client, "backend", None)
+        model_name = getattr(backend, "model", None) or getattr(backend, "name", None)
+        log_event(
+            "llm_turn_start",
+            component="agent_loop",
+            turn=turn,
+            model=model_name,
+            verbose=verbose,
+            tools_provided=bool(tools_schema),
+        )
+        turn_started = time.perf_counter()
         response_gen = client.chat(messages=messages, tools=tools_schema)
         # ? verbose模式下，response_gen是一个生成器，yield from response_gen可以边生成边输出；
         # 非verbose模式下，将回复做上下文压缩,不展示全部的内容,而是将超过窗口的记录,拼接nlines....
-        if verbose:
-            response = yield from response_gen
-            yield '\n\n'
-        else:
-            response = exhaust(response_gen)
-            cleaned = _clean_content(response.content)
-            if cleaned: yield cleaned + '\n'
+        try:
+            if verbose:
+                response = yield from response_gen
+                yield '\n\n'
+            else:
+                response = exhaust(response_gen)
+                cleaned = _clean_content(response.content)
+                if cleaned: yield cleaned + '\n'
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:
+            log_exception(
+                "llm_turn_exception",
+                exc,
+                recoverable=False,
+                component="agent_loop",
+                turn=turn,
+                model=model_name,
+            )
+            raise
+        log_event(
+            "llm_turn_end",
+            component="agent_loop",
+            turn=turn,
+            model=model_name,
+            duration_ms=round((time.perf_counter() - turn_started) * 1000, 2),
+            tool_call_count=len(getattr(response, "tool_calls", []) or []),
+            stop_reason=getattr(response, "stop_reason", None),
+            content=content_summary(getattr(response, "content", ""), max_len=240),
+        )
 
         # tool加载
         # 在no_tool中定义了退出情况
-        if not response.tool_calls: tool_calls = [{'tool_name': 'no_tool', 'args': {}}]
-        else: tool_calls = [{'tool_name': tc.function.name, 'args': json.loads(tc.function.arguments), 'id': tc.id}
-                          for tc in response.tool_calls]
+        if not response.tool_calls:
+            tool_calls = [{'tool_name': 'no_tool', 'args': {}}]
+        else:
+            tool_calls = []
+            for tc in response.tool_calls:
+                try:
+                    parsed_args = json.loads(tc.function.arguments)
+                except Exception as exc:
+                    log_exception(
+                        "tool_args_parse_error",
+                        exc,
+                        level="warning",
+                        recoverable=True,
+                        component="agent_loop",
+                        turn=turn,
+                        tool_name=tc.function.name,
+                    )
+                    parsed_args = {"msg": f"Failed to parse tool arguments: {content_summary(tc.function.arguments, max_len=200)}"}
+                    tool_calls.append({'tool_name': 'bad_json', 'args': parsed_args, 'id': tc.id})
+                    continue
+                tool_calls.append({'tool_name': tc.function.name, 'args': parsed_args, 'id': tc.id})
        
         tool_results = []; next_prompts = set(); exit_reason = {}
         # 调用的多个工具会依次处理，每个工具的调用结果会影响后续的流程控制（如是否继续当前任务、是否退出、是否进入下一个任务等）。
@@ -94,12 +148,22 @@ def agent_runner_loop(client, system_prompt, user_input, handler, tools_schema, 
             next_prompts.add(handler._done_hooks.pop(0))
         # 每轮结束时,更新工作记忆、在prompt中注入干预提示
         next_prompt = handler.turn_end_callback(response, tool_calls, tool_results, turn, '\n'.join(next_prompts), exit_reason)
+        log_event(
+            "turn_end",
+            component="agent_loop",
+            turn=turn,
+            tool_results=summarize(tool_results),
+            exit_reason=summarize(exit_reason),
+            next_prompt_len=len(next_prompt or ""),
+        )
         messages = [{"role": "user", "content": next_prompt, "tool_results": tool_results}]   # just new message, history is kept in *Session
     
     # 当启用了ask_user或者no_tools时会
     if exit_reason: handler.turn_end_callback(response, tool_calls, tool_results, turn, '', exit_reason)
     # 如果超过最大轮数,且无其他退出原因,设置成'MAX_TURNS_EXCEEDED'
-    return exit_reason or {'result': 'MAX_TURNS_EXCEEDED'}
+    result = exit_reason or {'result': 'MAX_TURNS_EXCEEDED'}
+    log_event("agent_loop_end", component="agent_loop", turn=turn, result=summarize(result))
+    return result
 
 def _clean_content(text):
     if not text: return ''
