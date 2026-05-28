@@ -14,7 +14,7 @@ LocalPilot 当前优先保证“本地通用 Agent 的任务闭环”可用，�
 
 ## 核心能力
 
-- **本地 CLI Agent**：`python agentmain.py` 启动交互式 Agent，输入自然语言后由模型决定是否调用工具继续推进。
+- **本地 CLI Agent**：`python runagent.py` 启动交互式 Agent，输入自然语言后由模型决定是否调用工具继续推进。
 - **工具执行闭环**：`agent/agent_loop.py` 负责模型响应、工具调用、工具结果回灌和终止控制。
 - **文件与代码工具**：`tools/` 提供文件读取、局部补丁、覆盖写入、Python / shell 执行、用户询问和记忆更新。
 - **模型会话适配**：`core/session.py` 支持 OpenAI-compatible 与 Claude 风格接口，包含 native tool calling 和文本工具协议 fallback。
@@ -253,7 +253,7 @@ langfuse_config = {
 
 | 能力 | 状态 | 说明 |
 | --- | --- | --- |
-| 交互式 CLI | 已接入 | `python agentmain.py` 启动本地 Agent。 |
+| 交互式 CLI | 已接入 | `python runagent.py` 启动本地 Agent。 |
 | task 文件 I/O | 已接入 | `--task` / `--input` 输出到 `temp/<task>/`。 |
 | Agent Loop | 已接入 | 支持多轮模型响应、工具调用、结果回灌和退出控制。 |
 | 文件与代码工具 | 已接入 | 覆盖文件读写、补丁、Python / shell 执行和用户询问。 |
