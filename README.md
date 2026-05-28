@@ -100,7 +100,7 @@ native_claude_config = {
 启动交互模式：
 
 ```bash
-python agentmain.py
+python runagent.py
 ```
 
 ## 使用方式
@@ -108,7 +108,7 @@ python agentmain.py
 ### 交互式本地助手
 
 ```bash
-python agentmain.py
+python runagent.py
 ```
 
 示例输入：
@@ -127,7 +127,7 @@ python agentmain.py
 ### 一次性任务
 
 ```bash
-python agentmain.py --task demo --input "读取项目结构，输出核心模块说明"
+python runagent.py --task demo --input "读取项目结构，输出核心模块说明"
 ```
 
 执行后会使用 `temp/demo/` 作为任务目录：
@@ -142,7 +142,7 @@ python agentmain.py --task demo --input "读取项目结构，输出核心模块
 后台运行：
 
 ```bash
-python agentmain.py --task demo --bg --input "检查 tools 目录里的工具能力"
+python runagent.py --task demo --bg --input "检查 tools 目录里的工具能力"
 ```
 
 后台模式会打印 PID，标准输出和错误日志写入 `temp/demo/stdout.log` 与 `temp/demo/stderr.log`。
@@ -168,13 +168,13 @@ Plan 相关 SOP 位于：
 启动定时任务扫描：
 
 ```bash
-python agentmain.py --reflect reflect/scheduler.py
+python runagent.py --reflect reflect/scheduler.py
 ```
 
 启动自主触发脚本：
 
 ```bash
-python agentmain.py --reflect reflect/autonomous.py
+python runagent.py --reflect reflect/autonomous.py
 ```
 
 `reflect/scheduler.py` 会扫描 `sche_tasks/*.json`，在指定时间把任务提示交给 Agent。任务完成报告默认落在 `sche_tasks/done/`，reflect 运行日志落在 `temp/reflect_logs/`。
