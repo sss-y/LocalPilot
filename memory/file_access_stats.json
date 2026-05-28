@@ -24,11 +24,15 @@
     "last": "2026-05-17"
   },
   "global_mem.txt": {
-    "count": 1,
-    "last": "2026-05-17"
+    "count": 3,
+    "last": "2026-05-28"
   },
   "supervisor_sop.md": {
     "count": 1,
     "last": "2026-05-17"
+  },
+  "global_mem_insight.txt": {
+    "count": 2,
+    "last": "2026-05-28"
   }
 }

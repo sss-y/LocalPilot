@@ -1,1 +1,8 @@
 # [Global Memory - L2]
+
+## [GIT WORKFLOW]
+提交到GitHub前必须：
+1. git diff 确认变更范围，生成推荐 commit message
+2. 展示给用户确认，等待用户明确同意
+3. 确认后才执行 git add -A && git commit && git push
+远程: origin = https://github.com/sss-y/LocalPilot.git, 分支: main
