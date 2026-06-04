@@ -24,6 +24,7 @@ def _check_plan_completion(working: dict) -> int | None:
         return None
     try:
         with open(plan_path, encoding="utf-8", errors="replace") as handle:
+            # 统计 [ ] 的数量作为未完成的任务数并返回
             return len(re.findall(r"\[ \]", handle.read()))
     except OSError:
         return None

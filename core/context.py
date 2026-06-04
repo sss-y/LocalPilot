@@ -113,12 +113,14 @@ def trim_messages_history(
       - 直到满足 target 或消息数降到 MIN_MESSAGES
     触发参数：TRIGGER_RATIO=3, KEEP_RECENT=4, TARGET_RATIO=0.6, MIN_MESSAGES=5
     """
+    # 轻压缩
     compress_history_tags(history)
     cost = estimate_context_cost(history)
     print(f"[Debug] Current context: {cost} chars, {len(history)} messages.")
 
     if cost <= context_win * trigger_ratio:
         return
+    # 强压
     compress_history_tags(history, keep_recent=keep_recent, force=True)
     target = context_win * trigger_ratio * target_ratio
     while len(history) > min_messages and cost > target:
