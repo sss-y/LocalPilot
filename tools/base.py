@@ -30,7 +30,6 @@ class BaseHandler:
     def tool_after_callback(self, tool_name, args, response, ret):
         pass
 
-
     def turn_end_callback(self, response, tool_calls, tool_results, turn, next_prompt, exit_reason):
         return next_prompt
 
