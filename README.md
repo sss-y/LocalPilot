@@ -22,7 +22,6 @@ LocalPilot 当前优先保证“本地通用 Agent 的任务闭环”可用，�
 - **任务模式**：`--task` 把输入和输出落盘到 `temp/<task>/`，适合被脚本、调度器或其他本地系统调用。
 - **计划与反射**：Plan / Verify SOP 支撑复杂任务拆解；`--reflect` 可加载定时或自主触发脚本。
 - **结构化日志与异常恢复**：`core/observability.py` 为每次用户可见任务生成 `run_id`，把任务、模型请求、工具调用、异常和耗时写入 JSONL。
-- **可选观测**：配置 `langfuse_config` 后会尝试启用 `plugins/langfuse_tracing.py`。
 
 ## 工作方式
 
@@ -242,7 +241,6 @@ reflect/            # 定时任务和自主触发脚本
 sche_tasks/         # scheduler 扫描的任务配置与完成报告
 temp/               # task 输出、模型日志、JSONL 事件日志、临时工作目录
 assets/             # 系统提示词和记忆模板
-plugins/            # 可选插件，例如 Langfuse tracing
 tests/              # 当前测试集合，仍在随重构收敛
 ```
 
@@ -264,16 +262,6 @@ mixin_config = {
     "max_retries": 3,
     "base_delay": 1.5,
     "spring_back": 300,
-}
-```
-
-可选 Langfuse tracing：
-
-```python
-langfuse_config = {
-    "public_key": "YOUR_PUBLIC_KEY",
-    "secret_key": "YOUR_SECRET_KEY",
-    "host": "https://cloud.langfuse.com",
 }
 ```
 
@@ -300,7 +288,6 @@ langfuse_config = {
 | 异常恢复 | 已接入 | 工具异常局部恢复；模型请求保留 retry；任务级异常输出短错误并记录 traceback。 |
 | Plan / Verify SOP | 已有流程 | 面向复杂任务，依赖 Agent 按 SOP 执行。 |
 | Reflect / Scheduler | 已接入 | 适合本地定时任务和长期运行流程。 |
-| Langfuse tracing | 可选 | 有配置时尝试启用，不作为核心依赖。 |
 | 依赖清单 | 已接入 | `requirements.txt` 包含核心运行依赖，可选依赖在文件中注释标明。 |
 | 测试集合 | 待收敛 | `tests/` 中仍有重构遗留用例，需要继续对齐当前模块。 |
 
