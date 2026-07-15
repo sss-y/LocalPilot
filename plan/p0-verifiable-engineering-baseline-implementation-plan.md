@@ -187,7 +187,7 @@ flowchart TD
   - 完成可见性：单元测试覆盖全部合法/非法状态组合，非法对象不能被序列化为权威报告。
   - _Requirements: 3.2, 3.3, 3.4, 3.5, 8.1, 8.2, 8.5_
 
-- [ ] 2.2 (P) 实现递归脱敏器
+- [x] 2.2 (P) 实现递归脱敏器
   - _Boundary: Redaction_
   - _Depends: 2.1_
   - _Estimate: 1–2 hours_
