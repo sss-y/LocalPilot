@@ -140,7 +140,7 @@ flowchart TD
 
 ### 1. 建立 P0 工程资产与运行环境基础
 
-- [ ] 1.1 创建 P0 包骨架和帮助入口
+- [x] 1.1 创建 P0 包骨架和帮助入口
   - _Boundary: BaselineScaffolding_
   - _Depends: none_
   - _Estimate: 1–2 hours_
