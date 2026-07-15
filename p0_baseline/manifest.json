@@ -1,0 +1,17 @@
+{
+    "schema_version": "0.1.0",
+    "manifest_id": "localpilot.p0-baseline",
+    "required_assets": [],
+    "checks": [],
+    "supported_environments": [
+        {
+            "environment_id": "darwin-arm64-cpython-3.12",
+            "os": "Darwin",
+            "architecture": "arm64",
+            "runtime_name": "CPython",
+            "runtime_version": "3.12.x"
+        }
+    ],
+    "evidence_schema_version": "0.1.0",
+    "supported_environment_id": "darwin-arm64-cpython-3.12"
+}

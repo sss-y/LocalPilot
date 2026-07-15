@@ -1,0 +1,7 @@
+{
+    "os": "Darwin",
+    "architecture": "arm64",
+    "runtime_name": "CPython",
+    "runtime_version": "3.12.13",
+    "expected_supported": true
+}

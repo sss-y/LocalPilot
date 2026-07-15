@@ -1,0 +1,23 @@
+[
+    {
+        "os": "Linux",
+        "architecture": "arm64",
+        "runtime_name": "CPython",
+        "runtime_version": "3.12.13",
+        "expected_supported": false
+    },
+    {
+        "os": "Darwin",
+        "architecture": "x86_64",
+        "runtime_name": "CPython",
+        "runtime_version": "3.12.13",
+        "expected_supported": false
+    },
+    {
+        "os": "Darwin",
+        "architecture": "arm64",
+        "runtime_name": "CPython",
+        "runtime_version": "3.11.13",
+        "expected_supported": false
+    }
+]

@@ -158,7 +158,7 @@ flowchart TD
   - 完成可见性：`git check-ignore` 证明 P0 测试可跟踪、`temp/` 和凭证仍被忽略，所有已发现历史测试均有明确分类。
   - _Requirements: 1.1, 1.2, 1.3, 1.5, 5.6, 10.3_
 
-- [ ] 1.3 (P) 固定首版支持矩阵
+- [x] 1.3 (P) 固定首版支持矩阵
   - _Boundary: EnvironmentDeclaration_
   - _Depends: 1.1_
   - _Estimate: 1–2 hours_
