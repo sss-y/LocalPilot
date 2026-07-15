@@ -9,7 +9,12 @@ __pycache__/
 temp/
 .vscode
 docs/
-tests/
+# 历史测试不是 P0 必需资产；仅 tests/p0/** 进入受控基线。
+tests/*
+!tests/p0/
+!tests/p0/**
+tests/p0/**/__pycache__/
+tests/p0/**/*.pyc
 sche_tasks/
 t.py
 memory/L4_raw_sessions/2026-05.zip

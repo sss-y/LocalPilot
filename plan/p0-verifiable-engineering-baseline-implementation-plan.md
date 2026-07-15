@@ -149,7 +149,7 @@ flowchart TD
   - 完成可见性：从仓库根目录和非根工作目录执行 `python -m p0_baseline --help` 均返回 `0`，且不会导入个人模型配置。
   - _Requirements: 3.1, 9.1, 9.2_
 
-- [ ] 1.2 治理 Git 忽略规则和历史测试资产
+- [x] 1.2 治理 Git 忽略规则和历史测试资产
   - _Boundary: BaselineAssets_
   - _Depends: 1.1_
   - _Estimate: 2–3 hours_
