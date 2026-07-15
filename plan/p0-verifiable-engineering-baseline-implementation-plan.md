@@ -178,7 +178,7 @@ flowchart TD
 
 ### 2. 实现契约模型、脱敏和 Manifest
 
-- [ ] 2.1 实现强类型状态、报告和错误模型
+- [x] 2.1 实现强类型状态、报告和错误模型
   - _Boundary: ContractModels_
   - _Depends: 1.1_
   - _Estimate: 2–3 hours_
