@@ -1,0 +1,17 @@
+# P0 verification dependencies for Darwin arm64 / CPython 3.12.x.
+# Generated on 2026-07-15 from requirements.txt with:
+#   python -m pip download --only-binary=:all: --platform macosx_11_0_arm64 \
+#     --implementation cp --python-version 3.12 --abi cp312 \
+#     --index-url https://pypi.org/simple -r requirements.txt
+# Hashes are from the downloaded official PyPI wheel artifacts.
+
+certifi==2026.6.17 \
+    --hash=sha256:2227dcbaafe0d2f59279d1762ddddc37783ed4354594f194ffc31d20f41fc3db
+charset-normalizer==3.4.9 \
+    --hash=sha256:45b0cc4e3556cd875e09102988d1ab8356c998b596c9fced84547c8138b487a0
+idna==3.18 \
+    --hash=sha256:7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2
+requests==2.34.2 \
+    --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0
+urllib3==2.7.0 \
+    --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897

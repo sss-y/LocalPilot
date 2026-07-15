@@ -12,6 +12,8 @@
             "runtime_version": "3.12.x"
         }
     ],
+    "dependency_lock": "requirements-p0.lock",
+    "dependency_fingerprint": "sha256:0ef313c02b5ac3351b5d19462bc82fde2b1796b723747235fd399c7070965d32",
     "evidence_schema_version": "0.1.0",
     "supported_environment_id": "darwin-arm64-cpython-3.12"
 }

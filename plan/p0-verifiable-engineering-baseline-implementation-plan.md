@@ -167,7 +167,7 @@ flowchart TD
   - 完成可见性：支持和不支持环境 fixture 能分别产生 `supported=true/false` 的确定预期。
   - _Requirements: 2.2, 2.3, 2.4_
 
-- [ ] 1.4 建立可复现依赖 lock 和准备验证
+- [x] 1.4 建立可复现依赖 lock 和准备验证
   - _Boundary: DependencyDeclaration_
   - _Depends: 1.3_
   - _Estimate: 2–3 hours_
