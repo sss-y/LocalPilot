@@ -46,7 +46,7 @@ def agent_runner_loop(client, system_prompt, user_input, handler, tools_schema, 
         )
         turn_started = time.perf_counter()
         response_gen = client.chat(messages=messages, tools=tools_schema)
-        # ? verbose模式下，response_gen是一个生成器，yield from response_gen可以边生成边输出；
+        # verbose模式下，response_gen是一个生成器，yield from response_gen可以边生成边输出；
         # 非verbose模式下，将回复做上下文压缩,不展示全部的内容,而是将超过窗口的记录,拼接nlines....
         try:
             if verbose:
