@@ -9,7 +9,9 @@
     {"path": "p0_baseline/schemas/report.schema.json", "kind": "config", "required": true, "requirement_ids": ["8.4"]},
     {"path": "tests/p0/fixtures/environments/supported.json", "kind": "fixture", "required": true, "requirement_ids": ["2.3"]},
     {"path": "tests/p0/fixtures/environments/unsupported.json", "kind": "fixture", "required": true, "requirement_ids": ["2.3"]},
+    {"path": "tests/p0/fixtures/worker_cases.py", "kind": "fixture", "required": true, "requirement_ids": ["3.3", "3.4", "5.1"]},
     {"path": "tests/p0/unit/test_asset_governance.py", "kind": "test", "required": true, "requirement_ids": ["1.1", "1.3", "5.6"]},
+    {"path": "tests/p0/unit/test_check_runtime.py", "kind": "test", "required": true, "requirement_ids": ["3.3", "3.4", "5.1", "8.1", "8.2"]},
     {"path": "tests/p0/unit/test_cli_entrypoint.py", "kind": "test", "required": true, "requirement_ids": ["3.1", "9.2"]},
     {"path": "tests/p0/unit/test_dependency_declaration.py", "kind": "test", "required": true, "requirement_ids": ["2.1", "2.5"]},
     {"path": "tests/p0/unit/test_environment_declaration.py", "kind": "test", "required": true, "requirement_ids": ["2.3", "2.4"]},
@@ -112,6 +114,20 @@
         "tests.p0.unit.test_redaction.RedactionTests.test_tool_result_canonical_key_replaces_the_entire_value",
         "tests.p0.unit.test_redaction.RedactionTests.test_tool_result_semantic_keys_replace_the_entire_value",
         "tests.p0.unit.test_redaction.RedactionTests.test_url_removes_userinfo_query_values_and_fragment"
+      ]
+    },
+    {
+      "check_id": "runtime.check-worker", "title": "Controlled check worker and adapters", "category": "behavior", "required": true,
+      "requirement_ids": ["3.3", "3.4", "5.1", "8.1", "8.2"], "asset_refs": ["tests/p0/unit/test_check_runtime.py", "tests/p0/fixtures/worker_cases.py"],
+      "network_policy": "offline", "timeout_ms": 10000, "migration_status": "stable", "adapter": "unittest", "allow_loopback": false,
+      "test_ids": [
+        "tests.p0.unit.test_check_runtime.AdapterTests.test_internal_adapter_only_executes_explicitly_registered_control_checks",
+        "tests.p0.unit.test_check_runtime.AdapterTests.test_invalid_worker_json_becomes_a_stable_error_result",
+        "tests.p0.unit.test_check_runtime.AdapterTests.test_registry_rejects_unknown_adapter_with_stable_diagnostic",
+        "tests.p0.unit.test_check_runtime.AdapterTests.test_unittest_adapter_converts_worker_json_without_parsing_terminal_text",
+        "tests.p0.unit.test_check_runtime.CheckWorkerTests.test_exact_test_ids_produce_structured_passed_failed_and_error_outcomes",
+        "tests.p0.unit.test_check_runtime.CheckWorkerTests.test_unknown_exact_test_id_is_a_structured_discovery_error",
+        "tests.p0.unit.test_check_runtime.CheckWorkerTests.test_worker_uses_request_and_result_files_as_the_authoritative_protocol"
       ]
     },
     {

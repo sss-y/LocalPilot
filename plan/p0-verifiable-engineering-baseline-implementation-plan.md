@@ -216,7 +216,7 @@ flowchart TD
 
 ### 3. 实现 Check Runtime、Preflight 和 Offline Boundary
 
-- [ ] 3.1 实现 Check Worker、Adapter 协议和注册表
+- [x] 3.1 实现 Check Worker、Adapter 协议和注册表
   - _Boundary: CheckRuntime_
   - _Depends: 2.1, 2.3_
   - _Estimate: 2–3 hours_
