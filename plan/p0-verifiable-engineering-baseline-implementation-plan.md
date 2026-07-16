@@ -225,7 +225,7 @@ flowchart TD
   - 完成可见性：fake 检查能够返回结构化 passed/failed/error 结果，未知 Adapter 和结果 JSON 无效时产生稳定诊断。
   - _Requirements: 3.3, 3.4, 5.1, 8.1, 8.2_
 
-- [ ] 3.2 (P) 实现仓库、运行时和代码来源预检
+- [x] 3.2 (P) 实现仓库、运行时和代码来源预检
   - _Boundary: Preflight_
   - _Depends: 2.1, 2.3_
   - _Estimate: 2–3 hours_

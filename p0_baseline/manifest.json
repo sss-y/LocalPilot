@@ -16,6 +16,7 @@
     {"path": "tests/p0/unit/test_dependency_declaration.py", "kind": "test", "required": true, "requirement_ids": ["2.1", "2.5"]},
     {"path": "tests/p0/unit/test_environment_declaration.py", "kind": "test", "required": true, "requirement_ids": ["2.3", "2.4"]},
     {"path": "tests/p0/unit/test_models.py", "kind": "test", "required": true, "requirement_ids": ["3.2", "8.4"]},
+    {"path": "tests/p0/unit/test_preflight.py", "kind": "test", "required": true, "requirement_ids": ["2.3", "2.4", "5.3", "5.4"]},
     {"path": "tests/p0/unit/test_redaction.py", "kind": "test", "required": true, "requirement_ids": ["1.5", "8.6"]},
     {"path": "tests/p0/unit/test_manifest.py", "kind": "test", "required": true, "requirement_ids": ["1.1", "5.1", "8.4"]}
   ],
@@ -92,6 +93,18 @@
         "tests.p0.unit.test_models.ReportInvariantTests.test_success_requires_all_required_checks_and_full_passed_coverage",
         "tests.p0.unit.test_models.ReportInvariantTests.test_summary_must_match_required_checks",
         "tests.p0.unit.test_models.ReportInvariantTests.test_supported_flag_and_environment_diagnostic_are_bidirectionally_consistent"
+      ]
+    },
+    {
+      "check_id": "preflight.repository", "title": "Repository runtime and code-origin preflight", "category": "environment", "required": true,
+      "requirement_ids": ["2.3", "2.4", "5.3", "5.4"], "asset_refs": ["tests/p0/unit/test_preflight.py"],
+      "network_policy": "offline", "timeout_ms": 10000, "migration_status": "stable", "adapter": "unittest", "allow_loopback": false,
+      "test_ids": [
+        "tests.p0.unit.test_preflight.PreflightTests.test_clean_repository_snapshot_uses_full_revision_and_relative_code_origins",
+        "tests.p0.unit.test_preflight.PreflightTests.test_code_origin_symlink_outside_checkout_is_rejected_without_importing_modules",
+        "tests.p0.unit.test_preflight.PreflightTests.test_dirty_tree_is_recorded_but_ignored_runtime_files_do_not_make_it_dirty",
+        "tests.p0.unit.test_preflight.PreflightTests.test_non_repository_is_a_stable_preflight_error",
+        "tests.p0.unit.test_preflight.PreflightTests.test_unsupported_runtime_is_a_stable_environment_violation"
       ]
     },
     {
