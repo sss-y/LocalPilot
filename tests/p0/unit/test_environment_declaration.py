@@ -58,9 +58,8 @@ class EnvironmentDeclarationTests(unittest.TestCase):
         self.assertIn("checks", self.manifest)
         self.assertIn("evidence_schema_version", self.manifest)
 
-        # Task 2.3 owns the complete asset/check declarations and Schema validation.
-        self.assertEqual(self.manifest["required_assets"], [])
-        self.assertEqual(self.manifest["checks"], [])
+        self.assertGreater(len(self.manifest["required_assets"]), 0)
+        self.assertGreater(len(self.manifest["checks"]), 0)
 
     def test_supported_fixture_has_deterministic_true_expectation(self) -> None:
         fixture = _read_json(FIXTURE_ROOT / "supported.json")

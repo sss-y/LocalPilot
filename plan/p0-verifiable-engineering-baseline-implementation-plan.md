@@ -196,7 +196,7 @@ flowchart TD
   - 完成可见性：嵌套 dict/list、URL、headers 和异常详情中的测试 secret 均不会出现在序列化结果中。
   - _Requirements: 1.5, 8.6_
 
-- [ ] 2.3 实现 Manifest Loader 和两个 JSON Schema
+- [x] 2.3 实现 Manifest Loader 和两个 JSON Schema
   - _Boundary: Manifest_
   - _Depends: 1.2, 1.3, 2.1_
   - _Estimate: 2–3 hours_
