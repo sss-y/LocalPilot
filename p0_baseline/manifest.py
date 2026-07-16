@@ -7,7 +7,9 @@ full Requirement coverage, and digest calculation belong to ManifestIntegrity.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -20,11 +22,12 @@ from .models import Diagnostic
 _SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _CHECK_ID = re.compile(r"^[a-z][a-z0-9]*(\.[a-z0-9][a-z0-9_-]*)+$")
 _TEST_ID = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*\.){2,}[A-Za-z_][A-Za-z0-9_]*$")
-_VALID_REQUIREMENTS = frozenset(
+REQUIREMENT_IDS = tuple(
     f"{group}.{criterion}"
     for group, total in {1: 5, 2: 6, 3: 6, 4: 6, 5: 6, 6: 9, 7: 6, 8: 6, 9: 6}.items()
     for criterion in range(1, total + 1)
 )
+_VALID_REQUIREMENTS = frozenset(REQUIREMENT_IDS)
 _APPROVED_ENVIRONMENT = {
     "environment_id": "darwin-arm64-cpython-3.12",
     "os": "Darwin",
@@ -58,6 +61,25 @@ class ManifestValidationError(ValueError):
             message="Required check manifest could not be validated.",
             failure_type="manifest",
             target="localpilot.p0-baseline",
+            recoverable=False,
+        )
+
+
+class ManifestIntegrityError(ValueError):
+    """Stable failure boundary for untrusted or incomplete manifest assets."""
+
+    def __init__(self, code: ErrorCode, target: str) -> None:
+        self.code = code
+        self.target = target
+        super().__init__("P0 manifest integrity validation failed.")
+
+    def to_diagnostic(self) -> Diagnostic:
+        failure_type = "asset" if self.code is ErrorCode.ASSET_MISSING else "manifest"
+        return Diagnostic(
+            code=self.code,
+            message="Required manifest integrity validation failed.",
+            failure_type=failure_type,
+            target=self.target,
             recoverable=False,
         )
 
@@ -237,6 +259,19 @@ class BaselineManifest:
         }
 
 
+@dataclass(frozen=True)
+class RequirementMapping:
+    requirement_id: str
+    check_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ManifestIntegrity:
+    asset_paths: tuple[str, ...]
+    requirement_coverage: tuple[RequirementMapping, ...]
+    manifest_digest: str
+
+
 def _asset(value: object) -> AssetDescriptor:
     fields = ("path", "kind", "required", "requirement_ids")
     data = _object(value, fields, "AssetDescriptor")
@@ -363,6 +398,121 @@ def load_manifest(path: str | Path) -> BaselineManifest:
     except BaseException:
         raise ManifestValidationError() from None
     return parse_manifest(source)
+
+
+def _git(repository_root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(repository_root), *args],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise ManifestIntegrityError(ErrorCode.MANIFEST_INVALID, "repository") from None
+
+
+def _validate_repository(repository_root: str | Path) -> Path:
+    try:
+        root = Path(repository_root).resolve(strict=True)
+    except OSError:
+        raise ManifestIntegrityError(ErrorCode.MANIFEST_INVALID, "repository") from None
+    if not root.is_dir():
+        raise ManifestIntegrityError(ErrorCode.MANIFEST_INVALID, "repository")
+    discovered = _git(root, "rev-parse", "--show-toplevel")
+    if discovered.returncode != 0:
+        raise ManifestIntegrityError(ErrorCode.MANIFEST_INVALID, "repository")
+    try:
+        git_root = Path(discovered.stdout.strip()).resolve(strict=True)
+    except OSError:
+        raise ManifestIntegrityError(ErrorCode.MANIFEST_INVALID, "repository") from None
+    if git_root != root:
+        raise ManifestIntegrityError(ErrorCode.MANIFEST_INVALID, "repository")
+    if _git(root, "rev-parse", "--verify", "HEAD").returncode != 0:
+        raise ManifestIntegrityError(ErrorCode.MANIFEST_INVALID, "repository")
+    return root
+
+
+def _validate_asset(root: Path, relative: str) -> None:
+    candidate = root / relative
+    try:
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(root)
+        if not resolved.is_file():
+            raise OSError
+        with resolved.open("rb") as stream:
+            stream.read(1)
+    except (OSError, ValueError):
+        raise ManifestIntegrityError(ErrorCode.ASSET_MISSING, relative) from None
+
+    ignored = _git(root, "check-ignore", "--no-index", "--quiet", "--", relative)
+    if ignored.returncode == 0:
+        raise ManifestIntegrityError(ErrorCode.ASSET_MISSING, relative)
+    if ignored.returncode != 1:
+        raise ManifestIntegrityError(ErrorCode.MANIFEST_INVALID, "repository")
+
+    tracked = _git(root, "cat-file", "-t", f"HEAD:{relative}")
+    if tracked.returncode != 0 or tracked.stdout.strip() != "blob":
+        raise ManifestIntegrityError(ErrorCode.ASSET_MISSING, relative)
+
+
+def _requirement_coverage(manifest: BaselineManifest) -> tuple[RequirementMapping, ...]:
+    mapping = {
+        requirement_id: tuple(
+            check.check_id
+            for check in manifest.checks
+            if requirement_id in check.requirement_ids
+        )
+        for requirement_id in REQUIREMENT_IDS
+    }
+    missing = tuple(key for key, check_ids in mapping.items() if not check_ids)
+    if missing:
+        raise ManifestIntegrityError(ErrorCode.MANIFEST_INVALID, missing[0])
+    return tuple(
+        RequirementMapping(requirement_id, mapping[requirement_id])
+        for requirement_id in REQUIREMENT_IDS
+    )
+
+
+def _manifest_digest(manifest: BaselineManifest) -> str:
+    canonical = json.dumps(
+        manifest.to_dict(),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+def validate_manifest_integrity(
+    manifest: BaselineManifest,
+    repository_root: str | Path,
+) -> ManifestIntegrity:
+    """Validate assets against HEAD and return stable coverage and digest data."""
+    try:
+        normalized = parse_manifest(manifest.to_dict())
+    except (AttributeError, ManifestValidationError):
+        raise ManifestIntegrityError(ErrorCode.MANIFEST_INVALID, "manifest") from None
+    if normalized != manifest:
+        raise ManifestIntegrityError(ErrorCode.MANIFEST_INVALID, "manifest")
+    manifest = normalized
+    root = _validate_repository(repository_root)
+    asset_paths = tuple(asset.path for asset in manifest.required_assets)
+    asset_set = frozenset(asset_paths)
+    if manifest.dependency_lock not in asset_set:
+        raise ManifestIntegrityError(ErrorCode.ASSET_MISSING, manifest.dependency_lock)
+    for check in manifest.checks:
+        for reference in check.asset_refs:
+            if reference not in asset_set:
+                raise ManifestIntegrityError(ErrorCode.ASSET_MISSING, reference)
+    for path in asset_paths:
+        _validate_asset(root, path)
+    return ManifestIntegrity(
+        asset_paths=asset_paths,
+        requirement_coverage=_requirement_coverage(manifest),
+        manifest_digest=_manifest_digest(manifest),
+    )
 
 
 def validate_json_schema(instance: object, schema_path: str | Path) -> None:

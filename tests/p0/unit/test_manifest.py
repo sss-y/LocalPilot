@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import json
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 
 from p0_baseline.errors import ErrorCode
 from p0_baseline.manifest import (
+    REQUIREMENT_IDS,
+    AssetDescriptor,
+    ManifestIntegrityError,
     ManifestValidationError,
     load_manifest,
     parse_manifest,
+    validate_manifest_integrity,
     validate_json_schema,
 )
 from tests.p0.unit.test_models import report
@@ -299,6 +304,119 @@ class ManifestLoaderTests(unittest.TestCase):
         report_schema = json.loads(REPORT_SCHEMA_PATH.read_text(encoding="utf-8"))
         self.assertEqual("1.0.0", report_schema["properties"]["schema_version"]["const"])
         self.assertEqual(["success", "failure", "incomplete"], report_schema["properties"]["overall_status"]["enum"])
+
+
+class ManifestIntegrityTests(unittest.TestCase):
+    def _git(self, root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-c", "user.name=P0 Tests", "-c", "user.email=p0@example.invalid", *args],
+            cwd=root,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+    def _repository(self, root: Path, tracked: tuple[str, ...] = ("asset.txt",)) -> None:
+        self._git(root, "init", "-q")
+        for relative in tracked:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(relative, encoding="utf-8")
+        self._git(root, "add", *tracked)
+        self._git(root, "commit", "-q", "-m", "fixture")
+
+    def _manifest_for_asset(self, path: str):
+        source = load_manifest(MANIFEST_PATH)
+        check = replace(
+            source.checks[0],
+            requirement_ids=REQUIREMENT_IDS,
+            asset_refs=(path,),
+        )
+        return replace(
+            source,
+            required_assets=(AssetDescriptor(path, "fixture", True, ("1.1",)),),
+            checks=(check,),
+            dependency_lock=path,
+        )
+
+    def test_current_manifest_assets_are_head_tracked_and_all_56_requirements_are_covered(self) -> None:
+        result = validate_manifest_integrity(load_manifest(MANIFEST_PATH), REPOSITORY_ROOT)
+
+        self.assertRegex(result.manifest_digest, r"^sha256:[0-9a-f]{64}$")
+        self.assertEqual(56, len(result.requirement_coverage))
+        self.assertEqual(REQUIREMENT_IDS, tuple(item.requirement_id for item in result.requirement_coverage))
+        self.assertEqual(
+            tuple(asset.path for asset in load_manifest(MANIFEST_PATH).required_assets),
+            result.asset_paths,
+        )
+
+    def test_missing_ignored_untracked_and_adjacent_assets_fail_closed(self) -> None:
+        with TemporaryDirectory() as directory, TemporaryDirectory() as adjacent:
+            root = Path(directory)
+            self._repository(root, ("asset.txt", "tree/child.txt"))
+
+            ignored = root / "ignored.txt"
+            ignored.write_text("ignored", encoding="utf-8")
+            (root / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+            self._git(root, "add", ".gitignore")
+            self._git(root, "commit", "-q", "-m", "ignore rule")
+
+            outside = Path(adjacent) / "outside.txt"
+            outside.write_text("outside", encoding="utf-8")
+            (root / "escape.txt").symlink_to(outside)
+            self._git(root, "add", "escape.txt")
+            self._git(root, "commit", "-q", "-m", "tracked symlink")
+
+            (root / "tree" / "child.txt").unlink()
+            (root / "tree").rmdir()
+            (root / "tree").write_text("not the tracked tree", encoding="utf-8")
+
+            for path in ("missing.txt", "ignored.txt", "untracked.txt", "escape.txt", "tree"):
+                with self.subTest(path=path):
+                    if path == "untracked.txt":
+                        (root / path).write_text("local only", encoding="utf-8")
+                    with self.assertRaises(ManifestIntegrityError) as caught:
+                        validate_manifest_integrity(self._manifest_for_asset(path), root)
+                    self.assertIs(caught.exception.code, ErrorCode.ASSET_MISSING)
+
+    def test_unknown_asset_reference_and_missing_requirement_mapping_fail(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._repository(root)
+            manifest = self._manifest_for_asset("asset.txt")
+
+            unknown_ref = replace(
+                manifest,
+                checks=(replace(manifest.checks[0], asset_refs=("unknown.txt",)),),
+            )
+            with self.assertRaises(ManifestIntegrityError) as asset_error:
+                validate_manifest_integrity(unknown_ref, root)
+            self.assertIs(asset_error.exception.code, ErrorCode.ASSET_MISSING)
+
+            incomplete = replace(
+                manifest,
+                checks=(replace(manifest.checks[0], requirement_ids=REQUIREMENT_IDS[:-1]),),
+            )
+            with self.assertRaises(ManifestIntegrityError) as coverage_error:
+                validate_manifest_integrity(incomplete, root)
+            self.assertIs(coverage_error.exception.code, ErrorCode.MANIFEST_INVALID)
+
+    def test_manifest_digest_is_stable_and_changes_with_semantic_content(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._repository(root)
+            manifest = self._manifest_for_asset("asset.txt")
+
+            first = validate_manifest_integrity(manifest, root).manifest_digest
+            second = validate_manifest_integrity(manifest, root).manifest_digest
+            changed = replace(
+                manifest,
+                checks=(replace(manifest.checks[0], title="Changed title"),),
+            )
+            third = validate_manifest_integrity(changed, root).manifest_digest
+
+            self.assertEqual(first, second)
+            self.assertNotEqual(first, third)
 
 
 if __name__ == "__main__":

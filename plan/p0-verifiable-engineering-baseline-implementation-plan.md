@@ -205,7 +205,7 @@ flowchart TD
   - 完成可见性：有效 Manifest 可加载为不可变描述符；重复 ID、绝对路径、未知 Adapter 和不支持环境声明产生稳定错误码。
   - _Requirements: 1.1, 1.3, 1.4, 2.3, 5.1, 5.2, 5.5, 5.6, 8.4_
 
-- [ ] 2.4 实现受控资产、Requirement 覆盖和 Manifest 摘要校验
+- [x] 2.4 实现受控资产、Requirement 覆盖和 Manifest 摘要校验
   - _Boundary: ManifestIntegrity_
   - _Depends: 2.3_
   - _Estimate: 1–2 hours_

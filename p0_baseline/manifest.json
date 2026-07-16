@@ -136,8 +136,47 @@
         "tests.p0.unit.test_manifest.ManifestLoaderTests.test_requirement_and_check_identifiers_are_validated",
         "tests.p0.unit.test_manifest.ManifestLoaderTests.test_schema_subset_rejects_unsupported_keywords_fail_closed",
         "tests.p0.unit.test_manifest.ManifestLoaderTests.test_supported_environment_id_must_reference_the_unique_constraint",
-        "tests.p0.unit.test_manifest.ManifestLoaderTests.test_unknown_adapter_and_non_exact_unittest_ids_are_rejected"
+        "tests.p0.unit.test_manifest.ManifestLoaderTests.test_unknown_adapter_and_non_exact_unittest_ids_are_rejected",
+        "tests.p0.unit.test_manifest.ManifestIntegrityTests.test_current_manifest_assets_are_head_tracked_and_all_56_requirements_are_covered",
+        "tests.p0.unit.test_manifest.ManifestIntegrityTests.test_manifest_digest_is_stable_and_changes_with_semantic_content",
+        "tests.p0.unit.test_manifest.ManifestIntegrityTests.test_missing_ignored_untracked_and_adjacent_assets_fail_closed",
+        "tests.p0.unit.test_manifest.ManifestIntegrityTests.test_unknown_asset_reference_and_missing_requirement_mapping_fail"
       ]
+    },
+    {
+      "check_id": "manifest.integrity", "title": "Manifest asset and revision integrity", "category": "asset", "required": true,
+      "requirement_ids": ["1.2", "1.4", "5.3", "5.4"], "asset_refs": ["p0_baseline/manifest.json", "tests/p0/unit/test_manifest.py"],
+      "network_policy": "offline", "timeout_ms": 10000, "migration_status": "stable", "adapter": "internal", "allow_loopback": false
+    },
+    {
+      "check_id": "runtime.determinism", "title": "Repeated-run determinism", "category": "behavior", "required": true,
+      "requirement_ids": ["3.6"], "asset_refs": [],
+      "network_policy": "offline", "timeout_ms": 10000, "migration_status": "stable", "adapter": "internal", "allow_loopback": false
+    },
+    {
+      "check_id": "network.offline-boundary", "title": "Default offline network boundary", "category": "environment", "required": true,
+      "requirement_ids": ["4.1", "4.2", "4.3", "4.4", "4.5", "4.6"], "asset_refs": [],
+      "network_policy": "offline", "timeout_ms": 10000, "migration_status": "stable", "adapter": "internal", "allow_loopback": false
+    },
+    {
+      "check_id": "behavior.characterization", "title": "Protected behavior characterization", "category": "behavior", "required": true,
+      "requirement_ids": ["6.1", "6.2", "6.3", "6.4", "6.5", "6.6", "6.7", "6.8", "6.9"], "asset_refs": [],
+      "network_policy": "offline", "timeout_ms": 30000, "migration_status": "transitional", "adapter": "internal", "allow_loopback": false
+    },
+    {
+      "check_id": "scope.compatibility", "title": "P0 compatibility and scope", "category": "scope", "required": true,
+      "requirement_ids": ["7.1", "7.2", "7.3", "7.4", "7.5", "7.6"], "asset_refs": [],
+      "network_policy": "offline", "timeout_ms": 10000, "migration_status": "stable", "adapter": "internal", "allow_loopback": false
+    },
+    {
+      "check_id": "evidence.authoritative", "title": "Authoritative evidence production", "category": "behavior", "required": true,
+      "requirement_ids": ["8.3"], "asset_refs": ["p0_baseline/schemas/report.schema.json"],
+      "network_policy": "offline", "timeout_ms": 10000, "migration_status": "stable", "adapter": "internal", "allow_loopback": false
+    },
+    {
+      "check_id": "documentation.consistency", "title": "Documentation consistency", "category": "documentation", "required": true,
+      "requirement_ids": ["9.1", "9.2", "9.3", "9.4", "9.5", "9.6"], "asset_refs": ["plan/p0-test-asset-classification.md"],
+      "network_policy": "offline", "timeout_ms": 10000, "migration_status": "stable", "adapter": "internal", "allow_loopback": false
     }
   ],
   "supported_environments": [
