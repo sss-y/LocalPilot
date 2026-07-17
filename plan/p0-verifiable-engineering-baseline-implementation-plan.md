@@ -243,7 +243,7 @@ flowchart TD
   - 完成可见性：依赖漂移产生失败，注入假 API Key/Cookie/代理变量后 Worker 仍看不到原值且报告不泄露。
   - _Requirements: 2.1, 2.2, 2.5, 2.6, 4.6, 8.6, 10.3_
 
-- [ ] 3.4 (P) 实现父进程 Offline Guard
+- [x] 3.4 (P) 实现父进程 Offline Guard
   - _Boundary: OfflineBoundary_
   - _Depends: 2.1, 2.2_
   - _Estimate: 2–3 hours_
