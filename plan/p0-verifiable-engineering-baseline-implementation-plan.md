@@ -234,7 +234,7 @@ flowchart TD
   - 完成可见性：dirty tree 得到非资格状态，错误平台和当前检出外代码来源得到确定失败诊断。
   - _Requirements: 2.3, 2.4, 5.3, 5.4, 10.3_
 
-- [ ] 3.3 实现依赖指纹和 Worker 凭证环境净化
+- [x] 3.3 实现依赖指纹和 Worker 凭证环境净化
   - _Boundary: PreflightEnvironment_
   - _Depends: 1.4, 3.2_
   - _Estimate: 2–3 hours_

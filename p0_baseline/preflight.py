@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.machinery
+from importlib import metadata
+import os
 import platform
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 from .errors import ErrorCode
 from .manifest import BaselineManifest
@@ -21,6 +24,14 @@ from .models import (
 
 
 _REVISION = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+_LOCK_PIN = re.compile(r"^([a-z0-9]+(?:-[a-z0-9]+)*)==([^\s\\]+)\s+\\$")
+_LOCK_HASH = re.compile(r"^\s+--hash=sha256:([0-9a-f]{64})(\s+\\)?$")
+_EXACT_VERSION = re.compile(
+    r"(?:[1-9][0-9]*!)?[0-9]+(?:\.[0-9]+)*"
+    r"(?:(?:a|b|rc)[0-9]+)?(?:\.post[0-9]+)?(?:\.dev[0-9]+)?"
+    r"(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?",
+    re.IGNORECASE,
+)
 DEFAULT_MODULE_NAMES = (
     "config.paths",
     "core",
@@ -29,6 +40,27 @@ DEFAULT_MODULE_NAMES = (
     "core.session",
     "tools.base",
 )
+_WORKER_ENV_ALLOWED = frozenset({
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_COLLATE",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "LC_MONETARY",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "PATH",
+    "PYTHONDONTWRITEBYTECODE",
+    "PYTHONHASHSEED",
+    "PYTHONIOENCODING",
+    "PYTHONUNBUFFERED",
+    "PYTHONUTF8",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "TZ",
+})
 
 
 class PreflightError(RuntimeError):
@@ -171,10 +203,105 @@ def _code_origins(
     return origins, tuple(violations)
 
 
+def _read_locked_versions(lock_path: Path) -> dict[str, str]:
+    try:
+        lines = lock_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        raise ValueError from None
+    locked: dict[str, str] = {}
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line or line.startswith("#"):
+            index += 1
+            continue
+        pin = _LOCK_PIN.fullmatch(line)
+        if pin is None:
+            raise ValueError
+        name = pin.group(1)
+        version = pin.group(2)
+        if _EXACT_VERSION.fullmatch(version) is None:
+            raise ValueError
+        index += 1
+        hashes: set[str] = set()
+        while index < len(lines):
+            hash_match = _LOCK_HASH.fullmatch(lines[index])
+            if hash_match is None:
+                raise ValueError
+            digest = hash_match.group(1)
+            if digest in hashes:
+                raise ValueError
+            hashes.add(digest)
+            index += 1
+            continued = hash_match.group(2) is not None
+            if not continued:
+                break
+            if index >= len(lines):
+                raise ValueError
+        if not hashes or name in locked:
+            raise ValueError
+        locked[name] = version
+    if not locked:
+        raise ValueError
+    return locked
+
+
+def _dependency_fingerprint(versions: Mapping[str, str]) -> str:
+    declaration = "".join(
+        f"{name}=={versions[name]}\n" for name in sorted(versions)
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(declaration).hexdigest()}"
+
+
+def _inspect_dependencies(
+    manifest: BaselineManifest,
+    root: Path,
+) -> tuple[str, tuple[Diagnostic, ...]]:
+    try:
+        lock_path = (root / manifest.dependency_lock).resolve(strict=True)
+        lock_path.relative_to(root)
+        locked = _read_locked_versions(lock_path)
+        declared_fingerprint = _dependency_fingerprint(locked)
+        installed = {
+            name: metadata.version(name)
+            for name in locked
+        }
+        installed_fingerprint = _dependency_fingerprint(installed)
+        valid = (
+            declared_fingerprint == manifest.dependency_fingerprint
+            and installed_fingerprint == declared_fingerprint
+        )
+    except (OSError, ValueError, metadata.PackageNotFoundError):
+        installed_fingerprint = _dependency_fingerprint({})
+        valid = False
+    if valid:
+        return installed_fingerprint, ()
+    return installed_fingerprint, (Diagnostic(
+        code=ErrorCode.DEPENDENCY_UNDECLARED,
+        message="Installed P0 dependencies do not match the repository lock.",
+        failure_type="dependency",
+        target=manifest.dependency_lock,
+        recoverable=False,
+    ),)
+
+
+def sanitized_worker_env(
+    source: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    environment = os.environ if source is None else source
+    sanitized: dict[str, str] = {}
+    for name in environment:
+        if type(name) is not str or name not in _WORKER_ENV_ALLOWED:
+            continue
+        value = environment[name]
+        if type(value) is str:
+            sanitized[name] = value
+    return sanitized
+
+
 def inspect_preflight(
     manifest: BaselineManifest,
     repository_root: str | Path,
-    dependency_fingerprint: str,
     *,
     runtime_probe: RuntimeProbe | None = None,
     module_names: Iterable[str] = DEFAULT_MODULE_NAMES,
@@ -188,6 +315,8 @@ def inspect_preflight(
     supported = _runtime_supported(manifest, probe)
     origins, origin_violations = _code_origins(root, module_names)
     violations = list(origin_violations)
+    dependency_fingerprint, dependency_violations = _inspect_dependencies(manifest, root)
+    violations.extend(dependency_violations)
     if not supported:
         violations.insert(0, Diagnostic(
             code=ErrorCode.ENV_UNSUPPORTED,
