@@ -278,6 +278,7 @@ flowchart TD
   - 构造相邻同名模块、旧 `__pycache__` 和未跟踪 fixture 的负向场景，验证其不能影响结果。
   - 完成可见性：任何当前检出外代码、缓存依赖或未提交必需资产都会产生稳定失败。
   - _Requirements: 1.4, 5.3, 5.4, 10.3_
+  - _Blocked: debug attempted twice, still failing — import guard 可被动态 Loader/直接文件读取绕过，且 `-S` Worker 尚不能加载已验证的锁定第三方依赖；需重新建立可复核 RED→GREEN。_
 
 ### 4. 实现 Aggregator、Evidence、Runner 和 CLI
 
@@ -542,3 +543,7 @@ flowchart TD
 - 覆盖用户已有修改；
 - 扩展 P0 Out of scope；
 - 启用任何真实 Provider 在线验证。
+
+## Implementation Notes
+
+- Task 3.7：HEAD blob 与精确 lock 是正确权威边界；后续重试必须同时覆盖动态 Loader/直接文件读取隔离、`-S` 下锁定第三方包可达性，并保留可复核 RED 输出。
