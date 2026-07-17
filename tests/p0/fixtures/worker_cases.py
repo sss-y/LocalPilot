@@ -25,6 +25,24 @@ class ErrorFixture(unittest.TestCase):
         raise RuntimeError("controlled error")
 
 
+class SkippedFixture(unittest.TestCase):
+    @unittest.skip("controlled skip")
+    def test_is_skipped(self) -> None:
+        self.fail("decorated skip must not execute")
+
+
+class ExpectedFailureFixture(unittest.TestCase):
+    @unittest.expectedFailure
+    def test_is_expected_failure(self) -> None:
+        self.fail("controlled expected failure")
+
+
+class UnexpectedSuccessFixture(unittest.TestCase):
+    @unittest.expectedFailure
+    def test_is_unexpected_success(self) -> None:
+        self.assertTrue(True)
+
+
 class OfflineNetworkFixture(unittest.TestCase):
     """Exercise the real installed guard without allowing an unguarded OS call."""
 

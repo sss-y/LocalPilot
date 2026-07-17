@@ -127,13 +127,20 @@ def run_worker(
                 shell=False,
             )
             if completed.returncode != 0:
-                raise SafeSubprocessError()
+                raise SafeSubprocessError("P0_WORKER_EXIT_NONZERO")
             if result_path.is_symlink() or not result_path.is_file():
-                raise SafeSubprocessError()
+                raise SafeSubprocessError("P0_WORKER_RESULT_MISSING")
             if result_path.resolve(strict=True).parent != boundary:
-                raise SafeSubprocessError()
+                raise SafeSubprocessError("P0_WORKER_RESULT_INVALID")
             if result_path.stat().st_size > _MAX_RESULT_BYTES:
-                raise SafeSubprocessError()
-            return WorkerResult.from_json(result_path.read_bytes())
+                raise SafeSubprocessError("P0_WORKER_RESULT_INVALID")
+            try:
+                return WorkerResult.from_json(result_path.read_bytes())
+            except (OSError, ValueError, TypeError):
+                raise SafeSubprocessError("P0_WORKER_RESULT_INVALID") from None
+    except subprocess.TimeoutExpired:
+        raise SafeSubprocessError("P0_WORKER_TIMEOUT") from None
+    except SafeSubprocessError:
+        raise
     except (subprocess.SubprocessError, OSError, ValueError, TypeError):
         raise SafeSubprocessError() from None

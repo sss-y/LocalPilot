@@ -156,6 +156,54 @@ class SafeSubprocessTests(unittest.TestCase):
                 )
         process.assert_not_called()
 
+    def test_timeout_has_a_stable_internal_reason_without_waiting(self) -> None:
+        with mock.patch(
+            "p0_baseline.safe_subprocess.subprocess.run",
+            side_effect=subprocess.TimeoutExpired([sys.executable], 1),
+        ):
+            with self.assertRaises(SafeSubprocessError) as caught:
+                run_worker(
+                    WorkerRequest(
+                        "1.0.0",
+                        ("tests.p0.fixtures.worker_cases.PassingFixture.test_passes",),
+                    ),
+                    repository_root=REPOSITORY_ROOT,
+                    run_directory=self._run_directory(),
+                    sanitized_environment=self._environment(),
+                )
+        self.assertEqual("P0_WORKER_TIMEOUT", caught.exception.reason)
+
+    def test_nonzero_missing_and_invalid_results_have_stable_internal_reasons(self) -> None:
+        request = WorkerRequest(
+            "1.0.0", ("tests.p0.fixtures.worker_cases.PassingFixture.test_passes",)
+        )
+
+        def missing(command, **options):
+            return subprocess.CompletedProcess(command, 0, stdout="secret", stderr="secret")
+
+        def invalid(command, **options):
+            Path(command[6]).write_text("not-json secret", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, stdout="secret", stderr="secret")
+
+        cases = (
+            (lambda command, **options: subprocess.CompletedProcess(command, 7, stdout="secret", stderr="secret"), "P0_WORKER_EXIT_NONZERO"),
+            (missing, "P0_WORKER_RESULT_MISSING"),
+            (invalid, "P0_WORKER_RESULT_INVALID"),
+        )
+        for fake_run, reason in cases:
+            with self.subTest(reason=reason), mock.patch(
+                "p0_baseline.safe_subprocess.subprocess.run", side_effect=fake_run
+            ):
+                with self.assertRaises(SafeSubprocessError) as caught:
+                    run_worker(
+                        request,
+                        repository_root=REPOSITORY_ROOT,
+                        run_directory=self._run_directory(),
+                        sanitized_environment=self._environment(),
+                    )
+                self.assertEqual(reason, caught.exception.reason)
+                self.assertNotIn("secret", str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

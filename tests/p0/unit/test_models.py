@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 import unittest
 
 from p0_baseline.errors import ErrorCode
@@ -45,9 +46,16 @@ def check(
     required: bool = True,
     requirement_ids: tuple[str, ...] = ("3.2",),
 ) -> CheckResult:
+    diagnostic_codes = {
+        CheckStatus.FAILED: ErrorCode.CHECK_FAILED,
+        CheckStatus.ERROR: ErrorCode.CHECK_ERROR,
+        CheckStatus.SKIPPED: ErrorCode.CHECK_SKIPPED,
+        CheckStatus.NOT_RUN: ErrorCode.RESULT_MISSING,
+        CheckStatus.INTERRUPTED: ErrorCode.CHECK_INTERRUPTED,
+    }
     diagnostics = (
-        (diagnostic(ErrorCode.CHECK_ERROR if status is CheckStatus.ERROR else ErrorCode.CHECK_FAILED),)
-        if status in {CheckStatus.FAILED, CheckStatus.ERROR}
+        (diagnostic(diagnostic_codes[status]),)
+        if status in diagnostic_codes
         else ()
     )
     return CheckResult(
@@ -170,6 +178,24 @@ class EnumAndErrorContractTests(unittest.TestCase):
 
 
 class ValueObjectTests(unittest.TestCase):
+    def test_every_non_passed_check_requires_a_status_consistent_diagnostic(self) -> None:
+        for status in CheckStatus:
+            if status is CheckStatus.PASSED:
+                continue
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                replace(check(status), diagnostics=())
+
+        inconsistent = (
+            (CheckStatus.FAILED, ErrorCode.CHECK_SKIPPED),
+            (CheckStatus.ERROR, ErrorCode.RESULT_MISSING),
+            (CheckStatus.SKIPPED, ErrorCode.CHECK_ERROR),
+            (CheckStatus.NOT_RUN, ErrorCode.CHECK_FAILED),
+            (CheckStatus.INTERRUPTED, ErrorCode.CHECK_ERROR),
+        )
+        for status, code in inconsistent:
+            with self.subTest(status=status, code=code), self.assertRaises(ValueError):
+                replace(check(status), diagnostics=(diagnostic(code),))
+
     def test_diagnostic_round_trip_preserves_json_values(self) -> None:
         original = diagnostic()
         encoded = original.to_dict()

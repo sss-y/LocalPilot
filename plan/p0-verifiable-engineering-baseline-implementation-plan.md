@@ -261,7 +261,7 @@ flowchart TD
   - 完成可见性：子进程外网尝试被阻断，未知可执行文件不能启动，违规目标摘要不包含凭证或 query 内容。
   - _Requirements: 4.1, 4.3, 4.6, 8.6_
 
-- [ ] 3.6 实现 skip、xfail、缺失结果和 timeout 完整性语义
+- [x] 3.6 实现 skip、xfail、缺失结果和 timeout 完整性语义
   - _Boundary: CheckResultIntegrity_
   - _Depends: 3.1, 3.5_
   - _Estimate: 2–3 hours_

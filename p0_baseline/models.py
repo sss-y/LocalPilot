@@ -269,8 +269,31 @@ class CheckResult:
             isinstance(item, Diagnostic) for item in self.diagnostics
         ):
             raise TypeError("diagnostics must be a tuple of Diagnostic")
-        if self.status in {CheckStatus.FAILED, CheckStatus.ERROR} and not self.diagnostics:
-            raise ValueError("failed and error checks require at least one diagnostic")
+        if self.status is not CheckStatus.PASSED and not self.diagnostics:
+            raise ValueError("non-passed checks require at least one diagnostic")
+        diagnostic_codes = {item.code for item in self.diagnostics}
+        if self.status in {CheckStatus.FAILED, CheckStatus.ERROR}:
+            if not diagnostic_codes & FAILURE_ERROR_CODES:
+                raise ValueError("failed and error checks require a failure diagnostic")
+        elif self.status is CheckStatus.SKIPPED:
+            if (
+                ErrorCode.CHECK_SKIPPED not in diagnostic_codes
+                or diagnostic_codes & FAILURE_ERROR_CODES
+            ):
+                raise ValueError("skipped checks require only incomplete diagnostics")
+        elif self.status is CheckStatus.NOT_RUN:
+            if (
+                not diagnostic_codes
+                & {ErrorCode.RESULT_MISSING, ErrorCode.CHECK_INTERRUPTED}
+                or diagnostic_codes & FAILURE_ERROR_CODES
+            ):
+                raise ValueError("not_run checks require only incomplete diagnostics")
+        elif self.status is CheckStatus.INTERRUPTED:
+            if (
+                ErrorCode.CHECK_INTERRUPTED not in diagnostic_codes
+                or diagnostic_codes & FAILURE_ERROR_CODES
+            ):
+                raise ValueError("interrupted checks require only incomplete diagnostics")
         _as_string_tuple(self.evidence_refs, "evidence_refs")
         if self.observed is not None:
             _freeze_json(dict(self.observed) if isinstance(self.observed, Mapping) else self.observed, "observed")

@@ -9,13 +9,13 @@ from time import monotonic_ns
 from types import MappingProxyType
 from typing import Callable, Mapping, Protocol
 
-from .check_worker import WorkerRequest, WorkerResult
+from .check_worker import WorkerOutcome, WorkerRequest, WorkerResult
 from .errors import ErrorCode
 from .manifest import CheckDescriptor
 from .models import CheckResult, CheckStatus, Diagnostic
 
 
-WorkerExecutor = Callable[[WorkerRequest], str | bytes]
+WorkerExecutor = Callable[[WorkerRequest], WorkerResult | str | bytes]
 InternalCheck = Callable[["VerificationContext", CheckDescriptor], CheckResult]
 
 
@@ -46,13 +46,69 @@ def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _diagnostic(code: ErrorCode, descriptor: CheckDescriptor, failure_type: str) -> Diagnostic:
+def _diagnostic(
+    code: ErrorCode,
+    descriptor: CheckDescriptor,
+    failure_type: str,
+    *,
+    message: str = "Required check did not produce a passing structured result.",
+    details: Mapping[str, object] | None = None,
+) -> Diagnostic:
     return Diagnostic(
         code=code,
-        message="Required check did not produce a passing structured result.",
+        message=message,
         failure_type=failure_type,
         target=descriptor.check_id,
         recoverable=False,
+        details=details,
+    )
+
+
+def not_run_result(descriptor: CheckDescriptor) -> CheckResult:
+    """Build a required-check placeholder before an adapter has been started."""
+
+    started_at = _timestamp()
+    started_ns = monotonic_ns()
+    return _result(
+        descriptor,
+        CheckStatus.NOT_RUN,
+        started_at=started_at,
+        started_ns=started_ns,
+        diagnostics=(
+            _diagnostic(
+                ErrorCode.RESULT_MISSING,
+                descriptor,
+                "not_run",
+                message="Required check was not started, so no result is available.",
+            ),
+        ),
+    )
+
+
+def _observed(worker: WorkerResult) -> Mapping[str, object]:
+    statuses = sorted({item.status for item in worker.outcomes})
+    return {
+        "tests_run": worker.tests_run,
+        "outcome_counts": {
+            status: sum(item.status == status for item in worker.outcomes)
+            for status in statuses
+        },
+    }
+
+
+def _outcome_diagnostic(
+    code: ErrorCode,
+    descriptor: CheckDescriptor,
+    failure_type: str,
+    outcomes: tuple[WorkerOutcome, ...],
+) -> Diagnostic:
+    return _diagnostic(
+        code,
+        descriptor,
+        failure_type,
+        details={
+            "test_ids": [item.test_id for item in outcomes],
+        },
     )
 
 
@@ -93,6 +149,14 @@ class UnittestAdapter:
             diagnostics = (_diagnostic(ErrorCode.CHECK_FAILED, descriptor, "assertion"),)
         elif status is CheckStatus.ERROR:
             diagnostics = (_diagnostic(ErrorCode.CHECK_ERROR, descriptor, "worker"),)
+        elif status is CheckStatus.SKIPPED:
+            diagnostics = (_diagnostic(ErrorCode.CHECK_SKIPPED, descriptor, "skip"),)
+        elif status is CheckStatus.NOT_RUN:
+            diagnostics = (_diagnostic(ErrorCode.RESULT_MISSING, descriptor, "not_run"),)
+        elif status is CheckStatus.INTERRUPTED:
+            diagnostics = (
+                _diagnostic(ErrorCode.CHECK_INTERRUPTED, descriptor, "interrupted"),
+            )
         return _result(
             descriptor,
             status,
@@ -108,12 +172,31 @@ class UnittestAdapter:
             if descriptor.adapter != self.name:
                 raise ValueError("descriptor adapter mismatch")
             request = WorkerRequest("1.0.0", descriptor.test_ids)
-            worker = WorkerResult.from_json(context.worker_executor(request))
+            worker_output = context.worker_executor(request)
+            worker = (
+                worker_output
+                if isinstance(worker_output, WorkerResult)
+                else WorkerResult.from_json(worker_output)
+            )
             outcome_ids = tuple(item.test_id for item in worker.outcomes)
+            observed = _observed(worker)
             if worker.tests_run != len(descriptor.test_ids) or outcome_ids != descriptor.test_ids:
-                raise ValueError("worker result does not cover exact requested test IDs")
+                return _result(
+                    descriptor,
+                    CheckStatus.ERROR,
+                    started_at=started_at,
+                    started_ns=started_ns,
+                    diagnostics=(
+                        _diagnostic(
+                            ErrorCode.CHECK_ERROR,
+                            descriptor,
+                            "result_integrity",
+                            message="Worker result does not cover the exact requested test IDs.",
+                        ),
+                    ),
+                    observed=observed,
+                )
 
-            statuses = frozenset(item.status for item in worker.outcomes)
             network_violations = tuple(
                 item for item in worker.outcomes if item.failure_type == "network_policy"
             )
@@ -121,6 +204,15 @@ class UnittestAdapter:
                 item
                 for item in worker.outcomes
                 if item.status == "failed" and item.failure_type != "network_policy"
+            )
+            worker_errors = tuple(item for item in worker.outcomes if item.status == "error")
+            unexpected_successes = tuple(
+                item for item in worker.outcomes if item.status == "unexpected_success"
+            )
+            incomplete_outcomes = tuple(
+                item
+                for item in worker.outcomes
+                if item.status in {"skipped", "expected_failure"}
             )
             network_diagnostics = tuple(
                 Diagnostic(
@@ -137,36 +229,55 @@ class UnittestAdapter:
                 )
                 for item in network_violations
             )
-            incomplete_statuses = {
-                "error", "unexpected_success", "skipped", "expected_failure",
-            }
-            if statuses & incomplete_statuses:
-                status = CheckStatus.ERROR
-                diagnostics = (
-                    _diagnostic(ErrorCode.CHECK_ERROR, descriptor, "worker"),
-                    *network_diagnostics,
+            error_diagnostics: tuple[Diagnostic, ...] = ()
+            if worker_errors:
+                error_diagnostics += (
+                    _outcome_diagnostic(
+                        ErrorCode.CHECK_ERROR, descriptor, "worker", worker_errors
+                    ),
                 )
-                if ordinary_failures:
-                    diagnostics += (
-                        _diagnostic(ErrorCode.CHECK_FAILED, descriptor, "assertion"),
-                    )
-            elif network_violations or ordinary_failures:
+            if unexpected_successes:
+                error_diagnostics += (
+                    _outcome_diagnostic(
+                        ErrorCode.CHECK_ERROR,
+                        descriptor,
+                        "test_classification",
+                        unexpected_successes,
+                    ),
+                )
+            failure_diagnostics: tuple[Diagnostic, ...] = network_diagnostics
+            if ordinary_failures:
+                failure_diagnostics += (
+                    _outcome_diagnostic(
+                        ErrorCode.CHECK_FAILED,
+                        descriptor,
+                        "assertion",
+                        ordinary_failures,
+                    ),
+                )
+            incomplete_diagnostics: tuple[Diagnostic, ...] = ()
+            if incomplete_outcomes:
+                incomplete_diagnostics = (
+                    _outcome_diagnostic(
+                        ErrorCode.CHECK_SKIPPED,
+                        descriptor,
+                        "skip",
+                        incomplete_outcomes,
+                    ),
+                )
+
+            if error_diagnostics:
+                status = CheckStatus.ERROR
+                diagnostics = error_diagnostics + failure_diagnostics + incomplete_diagnostics
+            elif failure_diagnostics:
                 status = CheckStatus.FAILED
-                diagnostics = network_diagnostics
-                if ordinary_failures:
-                    diagnostics += (
-                        _diagnostic(ErrorCode.CHECK_FAILED, descriptor, "assertion"),
-                    )
+                diagnostics = failure_diagnostics + incomplete_diagnostics
+            elif incomplete_diagnostics:
+                status = CheckStatus.SKIPPED
+                diagnostics = incomplete_diagnostics
             else:
                 status = CheckStatus.PASSED
                 diagnostics = ()
-            observed = {
-                "tests_run": worker.tests_run,
-                "outcome_counts": {
-                    key: sum(item.status == key for item in worker.outcomes)
-                    for key in sorted(statuses)
-                },
-            }
             return _result(
                 descriptor,
                 status,

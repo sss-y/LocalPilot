@@ -5,7 +5,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from p0_baseline.adapters import InternalAdapter, UnittestAdapter, VerificationContext
+from p0_baseline.adapters import (
+    InternalAdapter,
+    UnittestAdapter,
+    VerificationContext,
+    not_run_result,
+)
 from p0_baseline.check_worker import (
     WorkerOutcome,
     WorkerRequest,
@@ -17,6 +22,7 @@ from p0_baseline.errors import ErrorCode
 from p0_baseline.manifest import CheckDescriptor, load_manifest
 from p0_baseline.models import CheckResult, CheckStatus
 from p0_baseline.registry import AdapterLookupError, AdapterRegistry
+from p0_baseline.safe_subprocess import SafeSubprocessError
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -38,6 +44,22 @@ def descriptor(adapter: str = "unittest", check_id: str = "runtime.fake") -> Che
 
 
 class CheckWorkerTests(unittest.TestCase):
+    def test_real_unittest_decorators_preserve_skip_xfail_and_unexpected_success(self) -> None:
+        test_ids = (
+            "tests.p0.fixtures.worker_cases.SkippedFixture.test_is_skipped",
+            "tests.p0.fixtures.worker_cases.ExpectedFailureFixture.test_is_expected_failure",
+            "tests.p0.fixtures.worker_cases.UnexpectedSuccessFixture.test_is_unexpected_success",
+        )
+
+        result = execute_worker_request(WorkerRequest("1.0.0", test_ids))
+
+        self.assertEqual(3, result.tests_run)
+        self.assertEqual(test_ids, tuple(item.test_id for item in result.outcomes))
+        self.assertEqual(
+            ("skipped", "expected_failure", "unexpected_success"),
+            tuple(item.status for item in result.outcomes),
+        )
+
     def test_exact_test_ids_produce_structured_passed_failed_and_error_outcomes(self) -> None:
         test_ids = (
             "tests.p0.fixtures.worker_cases.PassingFixture.test_passes",
@@ -261,6 +283,158 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(ErrorCode.CHECK_ERROR, result.diagnostics[0].code)
         self.assertNotIn("not-json", result.to_dict().__repr__())
 
+    def test_skip_and_expected_failure_are_incomplete_not_worker_errors(self) -> None:
+        test_ids = (
+            "tests.p0.fixtures.worker_cases.SkippedFixture.test_is_skipped",
+            "tests.p0.fixtures.worker_cases.ExpectedFailureFixture.test_is_expected_failure",
+        )
+        worker = execute_worker_request(WorkerRequest("1.0.0", test_ids))
+
+        result = UnittestAdapter().execute(
+            self._context(lambda request: worker.to_json()),
+            replace(descriptor(), test_ids=test_ids),
+        )
+
+        self.assertIs(result.status, CheckStatus.SKIPPED)
+        self.assertEqual((ErrorCode.CHECK_SKIPPED,), tuple(d.code for d in result.diagnostics))
+        self.assertEqual(
+            {"expected_failure": 1, "skipped": 1},
+            dict(result.observed["outcome_counts"]),
+        )
+
+    def test_unexpected_success_is_a_test_classification_error(self) -> None:
+        test_id = (
+            "tests.p0.fixtures.worker_cases."
+            "UnexpectedSuccessFixture.test_is_unexpected_success"
+        )
+        worker = execute_worker_request(WorkerRequest("1.0.0", (test_id,)))
+
+        result = UnittestAdapter().execute(
+            self._context(lambda request: worker.to_json()),
+            replace(descriptor(), test_ids=(test_id,)),
+        )
+
+        self.assertIs(result.status, CheckStatus.ERROR)
+        self.assertEqual(ErrorCode.CHECK_ERROR, result.diagnostics[0].code)
+        self.assertEqual("test_classification", result.diagnostics[0].failure_type)
+
+    def test_failed_outcome_has_priority_over_skip_but_preserves_skip_evidence(self) -> None:
+        test_ids = (
+            "tests.p0.fixtures.worker_cases.FailingFixture.test_fails",
+            "tests.p0.fixtures.worker_cases.SkippedFixture.test_is_skipped",
+        )
+        worker = execute_worker_request(WorkerRequest("1.0.0", test_ids))
+
+        result = UnittestAdapter().execute(
+            self._context(lambda request: worker.to_json()),
+            replace(descriptor(), test_ids=test_ids),
+        )
+
+        self.assertIs(result.status, CheckStatus.FAILED)
+        self.assertEqual(
+            (ErrorCode.CHECK_FAILED, ErrorCode.CHECK_SKIPPED),
+            tuple(d.code for d in result.diagnostics),
+        )
+        self.assertEqual({"failed": 1, "skipped": 1}, dict(result.observed["outcome_counts"]))
+
+    def test_worker_error_has_priority_over_failure_and_skip(self) -> None:
+        test_ids = (
+            "tests.p0.fixtures.worker_cases.FailingFixture.test_fails",
+            "tests.p0.fixtures.worker_cases.SkippedFixture.test_is_skipped",
+            "tests.p0.fixtures.worker_cases.ErrorFixture.test_errors",
+        )
+        worker = execute_worker_request(WorkerRequest("1.0.0", test_ids))
+
+        result = UnittestAdapter().execute(
+            self._context(lambda request: worker.to_json()),
+            replace(descriptor(), test_ids=test_ids),
+        )
+
+        self.assertIs(result.status, CheckStatus.ERROR)
+        self.assertEqual(ErrorCode.CHECK_ERROR, result.diagnostics[0].code)
+        self.assertIn(ErrorCode.CHECK_FAILED, tuple(d.code for d in result.diagnostics))
+        self.assertIn(ErrorCode.CHECK_SKIPPED, tuple(d.code for d in result.diagnostics))
+
+    def test_inexact_worker_coverage_is_a_check_error(self) -> None:
+        requested = (
+            "tests.p0.fixtures.worker_cases.PassingFixture.test_passes",
+            "tests.p0.fixtures.worker_cases.FailingFixture.test_fails",
+        )
+        variants = (
+            WorkerResult(
+                "1.0.0",
+                1,
+                (
+                    WorkerOutcome(requested[0], "passed"),
+                    WorkerOutcome(requested[1], "failed", "assertion"),
+                ),
+            ),
+            WorkerResult("1.0.0", 2, (WorkerOutcome(requested[0], "passed"),)),
+            WorkerResult(
+                "1.0.0",
+                2,
+                (WorkerOutcome(requested[1], "failed", "assertion"), WorkerOutcome(requested[0], "passed")),
+            ),
+        )
+        for worker in variants:
+            with self.subTest(worker=worker):
+                result = UnittestAdapter().execute(
+                    self._context(lambda request, value=worker: value.to_json()),
+                    replace(descriptor(), test_ids=requested),
+                )
+                self.assertIs(result.status, CheckStatus.ERROR)
+                self.assertEqual(ErrorCode.CHECK_ERROR, result.diagnostics[0].code)
+                self.assertEqual("result_integrity", result.diagnostics[0].failure_type)
+
+    def test_worker_process_failures_become_check_errors_without_leaking_reason(self) -> None:
+        for reason in (
+            "P0_WORKER_TIMEOUT",
+            "P0_WORKER_EXIT_NONZERO",
+            "P0_WORKER_RESULT_MISSING",
+            "P0_WORKER_RESULT_INVALID",
+        ):
+            with self.subTest(reason=reason):
+                result = UnittestAdapter().execute(
+                    self._context(
+                        lambda request, value=reason: (_ for _ in ()).throw(
+                            SafeSubprocessError(value)
+                        )
+                    ),
+                    descriptor(),
+                )
+                self.assertIs(result.status, CheckStatus.ERROR)
+                self.assertEqual(ErrorCode.CHECK_ERROR, result.diagnostics[0].code)
+                self.assertNotIn(reason, repr(result.to_dict()))
+
+    def test_not_run_result_is_descriptor_consistent_and_incomplete(self) -> None:
+        target = descriptor()
+
+        result = not_run_result(target)
+
+        self.assertEqual(target.check_id, result.check_id)
+        self.assertEqual(target.title, result.title)
+        self.assertIs(target.required, result.required)
+        self.assertEqual(target.requirement_ids, result.requirement_ids)
+        self.assertIs(result.status, CheckStatus.NOT_RUN)
+        self.assertEqual((ErrorCode.RESULT_MISSING,), tuple(d.code for d in result.diagnostics))
+        self.assertEqual("not_run", result.diagnostics[0].failure_type)
+
+    def test_adapter_accepts_the_safe_subprocess_structured_result(self) -> None:
+        worker = WorkerResult(
+            "1.0.0",
+            1,
+            (
+                WorkerOutcome(
+                    "tests.p0.fixtures.worker_cases.PassingFixture.test_passes",
+                    "passed",
+                ),
+            ),
+        )
+
+        result = UnittestAdapter().execute(self._context(lambda request: worker), descriptor())
+
+        self.assertIs(result.status, CheckStatus.PASSED)
+
     def test_network_policy_outcome_becomes_a_safe_failed_diagnostic(self) -> None:
         test_id = "tests.p0.fixtures.worker_cases.OfflineNetworkFixture.test_external_dns_is_blocked"
         worker = WorkerResult(
@@ -350,12 +524,10 @@ class AdapterTests(unittest.TestCase):
             tuple(item.code for item in result.diagnostics),
         )
 
-    def test_incomplete_worker_status_overrides_network_failure_but_preserves_evidence(self) -> None:
+    def test_worker_errors_override_network_failure_but_preserve_evidence(self) -> None:
         network_id = "tests.p0.fixtures.worker_cases.OfflineNetworkFixture.test_external_dns_is_blocked"
         for incomplete_status, failure_type in (
             ("error", "exception"),
-            ("skipped", "skip"),
-            ("expected_failure", "expected_failure"),
             ("unexpected_success", "unexpected_success"),
         ):
             incomplete_id = "tests.p0.fixtures.worker_cases.ErrorFixture.test_errors"
