@@ -114,15 +114,52 @@ class UnittestAdapter:
                 raise ValueError("worker result does not cover exact requested test IDs")
 
             statuses = frozenset(item.status for item in worker.outcomes)
-            diagnostics: tuple[Diagnostic, ...] = ()
-            if statuses & {"error", "unexpected_success", "skipped", "expected_failure"}:
+            network_violations = tuple(
+                item for item in worker.outcomes if item.failure_type == "network_policy"
+            )
+            ordinary_failures = tuple(
+                item
+                for item in worker.outcomes
+                if item.status == "failed" and item.failure_type != "network_policy"
+            )
+            network_diagnostics = tuple(
+                Diagnostic(
+                    code=ErrorCode.NETWORK_POLICY_VIOLATION,
+                    message="Offline network policy blocked an attempted connection.",
+                    failure_type="network_policy",
+                    target=item.target_summary or "<opaque-host>",
+                    recoverable=False,
+                    details={
+                        "test_id": item.test_id,
+                        "operation": item.operation,
+                        "source": item.source,
+                    },
+                )
+                for item in network_violations
+            )
+            incomplete_statuses = {
+                "error", "unexpected_success", "skipped", "expected_failure",
+            }
+            if statuses & incomplete_statuses:
                 status = CheckStatus.ERROR
-                diagnostics = (_diagnostic(ErrorCode.CHECK_ERROR, descriptor, "worker"),)
-            elif "failed" in statuses:
+                diagnostics = (
+                    _diagnostic(ErrorCode.CHECK_ERROR, descriptor, "worker"),
+                    *network_diagnostics,
+                )
+                if ordinary_failures:
+                    diagnostics += (
+                        _diagnostic(ErrorCode.CHECK_FAILED, descriptor, "assertion"),
+                    )
+            elif network_violations or ordinary_failures:
                 status = CheckStatus.FAILED
-                diagnostics = (_diagnostic(ErrorCode.CHECK_FAILED, descriptor, "assertion"),)
+                diagnostics = network_diagnostics
+                if ordinary_failures:
+                    diagnostics += (
+                        _diagnostic(ErrorCode.CHECK_FAILED, descriptor, "assertion"),
+                    )
             else:
                 status = CheckStatus.PASSED
+                diagnostics = ()
             observed = {
                 "tests_run": worker.tests_run,
                 "outcome_counts": {

@@ -70,6 +70,32 @@ def _safe_target_summary(address: object) -> str:
     return "<opaque-host>"
 
 
+def is_safe_target_summary(value: object) -> bool:
+    """Return whether a serialized target is a guard-produced safe summary."""
+
+    if value == "<opaque-host>":
+        return True
+    if not isinstance(value, str):
+        return False
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return _SAFE_HOST.fullmatch(value) is not None
+
+
+def is_safe_network_operation(value: object) -> bool:
+    """Return whether an operation is one of the guarded socket entry points."""
+
+    return type(value) is str and value in _OPERATIONS
+
+
+def is_safe_network_source(value: object) -> bool:
+    """Return whether a source is already in its evidence-safe canonical form."""
+
+    return type(value) is str and _safe_source(value) == value
+
+
 def _safe_source(source: str) -> str:
     if not isinstance(source, str):
         return "unknown-source"
@@ -172,6 +198,8 @@ class OfflineGuard:
                 guarded_connect_ex,
                 guarded_sendto,
             )
+            for wrapper in wrappers:
+                setattr(wrapper, "__p0_offline_guard__", True)
             self._originals = originals
             self._wrappers = wrappers
             (

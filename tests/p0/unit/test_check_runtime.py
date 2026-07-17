@@ -7,6 +7,7 @@ import unittest
 
 from p0_baseline.adapters import InternalAdapter, UnittestAdapter, VerificationContext
 from p0_baseline.check_worker import (
+    WorkerOutcome,
     WorkerRequest,
     WorkerResult,
     execute_worker_request,
@@ -64,6 +65,131 @@ class CheckWorkerTests(unittest.TestCase):
         self.assertEqual(1, result.tests_run)
         self.assertEqual("error", result.outcomes[0].status)
         self.assertEqual("discovery", result.outcomes[0].failure_type)
+
+    def test_worker_outcome_rejects_unsafe_network_target_summaries(self) -> None:
+        test_id = "tests.p0.fixtures.worker_cases.PassingFixture.test_passes"
+        for target in (
+            "https://user:password@example.invalid/path?token=secret",
+            "example.invalid?token=secret",
+            "user:password@example.invalid",
+        ):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                WorkerOutcome(
+                    test_id,
+                    "failed",
+                    "network_policy",
+                    target,
+                    "getaddrinfo",
+                    "check-worker",
+                )
+
+    def test_network_policy_outcome_requires_the_exact_failed_field_combination(self) -> None:
+        test_id = "tests.p0.fixtures.worker_cases.PassingFixture.test_passes"
+        for status in (
+            "passed",
+            "error",
+            "skipped",
+            "expected_failure",
+            "unexpected_success",
+        ):
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                WorkerOutcome(
+                    test_id,
+                    status,
+                    "network_policy",
+                    "example.invalid",
+                    "getaddrinfo",
+                    "check-worker",
+                )
+
+        for failure_type in (None, "assertion", "exception", "discovery"):
+            status = "passed" if failure_type is None else "failed"
+            with self.subTest(failure_type=failure_type), self.assertRaises(ValueError):
+                WorkerOutcome(
+                    test_id,
+                    status,
+                    failure_type,
+                    "example.invalid",
+                    "getaddrinfo",
+                    "check-worker",
+                )
+
+        for operation, source in (
+            ("system", "check-worker"),
+            ("getaddrinfo", "Authorization secret"),
+            ("getaddrinfo", "CHECK-WORKER"),
+            ("getaddrinfo", "parent"),
+        ):
+            with self.subTest(operation=operation, source=source), self.assertRaises(ValueError):
+                WorkerOutcome(
+                    test_id,
+                    "failed",
+                    "network_policy",
+                    "example.invalid",
+                    operation,
+                    source,
+                )
+
+        network_fields = ("example.invalid", "getaddrinfo", "check-worker")
+        for missing_index in range(3):
+            incomplete = list(network_fields)
+            incomplete[missing_index] = None
+            with self.subTest(missing_index=missing_index), self.assertRaises(
+                (TypeError, ValueError)
+            ):
+                WorkerOutcome(
+                    test_id,
+                    "failed",
+                    "network_policy",
+                    *incomplete,
+                )
+
+    def test_worker_outcome_json_rejects_unknown_and_partial_network_fields(self) -> None:
+        test_id = "tests.p0.fixtures.worker_cases.PassingFixture.test_passes"
+        valid = WorkerOutcome(
+            test_id,
+            "failed",
+            "network_policy",
+            "example.invalid",
+            "getaddrinfo",
+            "check-worker",
+        ).to_dict()
+        self.assertEqual(WorkerOutcome.from_dict(valid).to_dict(), valid)
+        self.assertEqual(
+            WorkerOutcome(test_id, "passed"),
+            WorkerOutcome.from_dict({"test_id": test_id, "status": "passed"}),
+        )
+
+        unknown = dict(valid, authorization="Bearer worker-secret")
+        with self.assertRaises(ValueError):
+            WorkerOutcome.from_dict(unknown)
+
+        for missing in ("target_summary", "operation", "source"):
+            partial = dict(valid)
+            del partial[missing]
+            with self.subTest(missing=missing), self.assertRaises((TypeError, ValueError)):
+                WorkerOutcome.from_dict(partial)
+
+    def test_malformed_network_policy_json_becomes_check_error(self) -> None:
+        test_id = "tests.p0.fixtures.worker_cases.PassingFixture.test_passes"
+        target = replace(descriptor(), test_ids=(test_id,))
+        malformed = (
+            '{"schema_version":"1.0.0","tests_run":1,"outcomes":['
+            f'{{"test_id":"{test_id}","status":"error",'
+            '"failure_type":"network_policy","target_summary":"example.invalid",'
+            '"operation":"getaddrinfo","source":"check-worker"}}]}'
+        )
+
+        with TemporaryDirectory() as directory:
+            context = VerificationContext(
+                repository_root=REPOSITORY_ROOT,
+                run_directory=Path(directory),
+                worker_executor=lambda request: malformed,
+            )
+            result = UnittestAdapter().execute(context, target)
+
+        self.assertIs(result.status, CheckStatus.ERROR)
+        self.assertEqual(ErrorCode.CHECK_ERROR, result.diagnostics[0].code)
 
     def test_worker_uses_request_and_result_files_as_the_authoritative_protocol(self) -> None:
         with TemporaryDirectory() as directory:
@@ -134,6 +260,127 @@ class AdapterTests(unittest.TestCase):
         self.assertIs(result.status, CheckStatus.ERROR)
         self.assertEqual(ErrorCode.CHECK_ERROR, result.diagnostics[0].code)
         self.assertNotIn("not-json", result.to_dict().__repr__())
+
+    def test_network_policy_outcome_becomes_a_safe_failed_diagnostic(self) -> None:
+        test_id = "tests.p0.fixtures.worker_cases.OfflineNetworkFixture.test_external_dns_is_blocked"
+        worker = WorkerResult(
+            "1.0.0",
+            1,
+            (
+                WorkerOutcome(
+                    test_id,
+                    "failed",
+                    "network_policy",
+                    "example.invalid",
+                    "getaddrinfo",
+                    "check-worker",
+                ),
+            ),
+        )
+        target = replace(descriptor(), test_ids=(test_id,))
+
+        result = UnittestAdapter().execute(
+            self._context(lambda request: worker.to_json()),
+            target,
+        )
+
+        self.assertIs(result.status, CheckStatus.FAILED)
+        diagnostic = result.diagnostics[0]
+        self.assertEqual(ErrorCode.NETWORK_POLICY_VIOLATION, diagnostic.code)
+        self.assertEqual("example.invalid", diagnostic.target)
+        self.assertEqual(test_id, diagnostic.details["test_id"])
+        self.assertEqual("getaddrinfo", diagnostic.details["operation"])
+        self.assertEqual("check-worker", diagnostic.details["source"])
+
+    def test_multiple_network_violations_preserve_each_safe_diagnostic(self) -> None:
+        test_ids = (
+            "tests.p0.fixtures.worker_cases.OfflineNetworkFixture.test_external_dns_is_blocked",
+            "tests.p0.fixtures.worker_cases.OfflineNetworkFixture.test_external_tcp_is_blocked",
+        )
+        worker = WorkerResult(
+            "1.0.0",
+            2,
+            (
+                WorkerOutcome(
+                    test_ids[0], "failed", "network_policy", "example.invalid",
+                    "getaddrinfo", "check-worker",
+                ),
+                WorkerOutcome(
+                    test_ids[1], "failed", "network_policy", "203.0.113.17",
+                    "connect", "check-worker",
+                ),
+            ),
+        )
+
+        result = UnittestAdapter().execute(
+            self._context(lambda request: worker.to_json()),
+            replace(descriptor(), test_ids=test_ids),
+        )
+
+        self.assertIs(result.status, CheckStatus.FAILED)
+        self.assertEqual(
+            (ErrorCode.NETWORK_POLICY_VIOLATION, ErrorCode.NETWORK_POLICY_VIOLATION),
+            tuple(item.code for item in result.diagnostics),
+        )
+        self.assertEqual(test_ids, tuple(item.details["test_id"] for item in result.diagnostics))
+
+    def test_network_and_ordinary_failure_preserve_both_diagnostics(self) -> None:
+        network_id = "tests.p0.fixtures.worker_cases.OfflineNetworkFixture.test_external_dns_is_blocked"
+        failed_id = "tests.p0.fixtures.worker_cases.FailingFixture.test_fails"
+        worker = WorkerResult(
+            "1.0.0",
+            2,
+            (
+                WorkerOutcome(
+                    network_id, "failed", "network_policy", "example.invalid",
+                    "getaddrinfo", "check-worker",
+                ),
+                WorkerOutcome(failed_id, "failed", "assertion"),
+            ),
+        )
+
+        result = UnittestAdapter().execute(
+            self._context(lambda request: worker.to_json()),
+            replace(descriptor(), test_ids=(network_id, failed_id)),
+        )
+
+        self.assertIs(result.status, CheckStatus.FAILED)
+        self.assertEqual(
+            (ErrorCode.NETWORK_POLICY_VIOLATION, ErrorCode.CHECK_FAILED),
+            tuple(item.code for item in result.diagnostics),
+        )
+
+    def test_incomplete_worker_status_overrides_network_failure_but_preserves_evidence(self) -> None:
+        network_id = "tests.p0.fixtures.worker_cases.OfflineNetworkFixture.test_external_dns_is_blocked"
+        for incomplete_status, failure_type in (
+            ("error", "exception"),
+            ("skipped", "skip"),
+            ("expected_failure", "expected_failure"),
+            ("unexpected_success", "unexpected_success"),
+        ):
+            incomplete_id = "tests.p0.fixtures.worker_cases.ErrorFixture.test_errors"
+            worker = WorkerResult(
+                "1.0.0",
+                2,
+                (
+                    WorkerOutcome(
+                        network_id, "failed", "network_policy", "example.invalid",
+                        "getaddrinfo", "check-worker",
+                    ),
+                    WorkerOutcome(incomplete_id, incomplete_status, failure_type),
+                ),
+            )
+            with self.subTest(status=incomplete_status):
+                result = UnittestAdapter().execute(
+                    self._context(lambda request, value=worker: value.to_json()),
+                    replace(descriptor(), test_ids=(network_id, incomplete_id)),
+                )
+                self.assertIs(result.status, CheckStatus.ERROR)
+                self.assertEqual(ErrorCode.CHECK_ERROR, result.diagnostics[0].code)
+                self.assertIn(
+                    ErrorCode.NETWORK_POLICY_VIOLATION,
+                    tuple(item.code for item in result.diagnostics),
+                )
 
     def test_internal_adapter_only_executes_explicitly_registered_control_checks(self) -> None:
         def passed(context: VerificationContext, target: CheckDescriptor) -> CheckResult:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import argparse
 import json
+import os
 import re
 import sys
 import unittest
@@ -12,10 +13,21 @@ from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 
+from .offline import (
+    NetworkPolicyViolation,
+    is_safe_network_operation,
+    is_safe_network_source,
+    is_safe_target_summary,
+    offline_guard,
+)
+
 
 _TEST_ID = re.compile(r"^(?:[A-Za-z_][A-Za-z0-9_]*\.){2,}[A-Za-z_][A-Za-z0-9_]*$")
 _OUTCOME_STATUSES = frozenset({
     "passed", "failed", "error", "skipped", "expected_failure", "unexpected_success",
+})
+_WORKER_OUTCOME_FIELDS = frozenset({
+    "test_id", "status", "failure_type", "target_summary", "operation", "source",
 })
 
 
@@ -77,6 +89,9 @@ class WorkerOutcome:
     test_id: str
     status: str
     failure_type: str | None = None
+    target_summary: str | None = None
+    operation: str | None = None
+    source: str | None = None
 
     def __post_init__(self) -> None:
         if _TEST_ID.fullmatch(_text(self.test_id, "test_id")) is None:
@@ -87,25 +102,56 @@ class WorkerOutcome:
             raise ValueError("passed outcomes cannot have a failure type")
         if self.status != "passed":
             _text(self.failure_type, "failure_type")
+        network_fields = (self.target_summary, self.operation, self.source)
+        if self.failure_type == "network_policy":
+            if self.status != "failed":
+                raise ValueError("network policy outcomes must be failed")
+            _text(self.target_summary, "target_summary")
+            if not is_safe_target_summary(self.target_summary):
+                raise ValueError("network policy target summary is unsafe")
+            if not is_safe_network_operation(self.operation):
+                raise ValueError("network policy operation is unsafe")
+            if self.source != "check-worker" or not is_safe_network_source(self.source):
+                raise ValueError("network policy source is unsafe")
+        elif any(value is not None for value in network_fields):
+            raise ValueError("only network policy failures may contain network fields")
 
     def to_dict(self) -> dict[str, object]:
         result: dict[str, object] = {"test_id": self.test_id, "status": self.status}
         if self.failure_type is not None:
             result["failure_type"] = self.failure_type
+        if self.target_summary is not None:
+            result["target_summary"] = self.target_summary
+            result["operation"] = self.operation
+            result["source"] = self.source
         return result
 
     @classmethod
     def from_dict(cls, value: object) -> WorkerOutcome:
         data = _object(value, "WorkerOutcome")
+        if set(data) - _WORKER_OUTCOME_FIELDS:
+            raise ValueError("WorkerOutcome contains unknown fields")
         if "test_id" not in data or "status" not in data:
             raise ValueError("WorkerOutcome is missing required fields")
         failure_type = data.get("failure_type")
         if failure_type is not None and type(failure_type) is not str:
             raise TypeError("failure_type must be text")
+        target_summary = data.get("target_summary")
+        if target_summary is not None and type(target_summary) is not str:
+            raise TypeError("target_summary must be text")
+        operation = data.get("operation")
+        if operation is not None and type(operation) is not str:
+            raise TypeError("operation must be text")
+        source = data.get("source")
+        if source is not None and type(source) is not str:
+            raise TypeError("source must be text")
         return cls(
             _text(data["test_id"], "test_id"),
             _text(data["status"], "status"),
             failure_type,
+            target_summary,
+            operation,
+            source,
         )
 
 
@@ -180,8 +226,18 @@ class RecordingTestResult(unittest.TestResult):
 
     def addError(self, test: unittest.case.TestCase, err: tuple[type[BaseException], BaseException, object]) -> None:  # noqa: N802
         super().addError(test, err)  # type: ignore[arg-type]
-        failure_type = "discovery" if type(test).__name__ == "_FailedTest" else "exception"
-        self._record(test, "error", failure_type)
+        if isinstance(err[1], NetworkPolicyViolation):
+            self._outcomes[test.id()] = WorkerOutcome(
+                test.id(),
+                "failed",
+                "network_policy",
+                err[1].target_summary,
+                err[1].operation,
+                err[1].source,
+            )
+        else:
+            failure_type = "discovery" if type(test).__name__ == "_FailedTest" else "exception"
+            self._record(test, "error", failure_type)
 
     def addSkip(self, test: unittest.case.TestCase, reason: str) -> None:  # noqa: N802
         super().addSkip(test, reason)
@@ -225,23 +281,36 @@ def _contains_failed_test(suite: unittest.TestSuite) -> bool:
     return False
 
 
-def execute_worker_request(request: WorkerRequest) -> WorkerResult:
-    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-        loader = unittest.TestLoader()
-        loaded = tuple(loader.loadTestsFromName(test_id) for test_id in request.test_ids)
-        discovery_failures = frozenset(
-            test_id
-            for test_id, suite in zip(request.test_ids, loaded, strict=True)
-            if _contains_failed_test(suite)
-        )
-        suite = unittest.TestSuite(loaded)
-        result = RecordingTestResult()
-        suite.run(result)
+def execute_worker_request(
+    request: WorkerRequest,
+    *,
+    allow_loopback: bool = False,
+) -> WorkerResult:
+    with offline_guard(allow_loopback=allow_loopback, source="check-worker"):
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            loader = unittest.TestLoader()
+            loaded = tuple(loader.loadTestsFromName(test_id) for test_id in request.test_ids)
+            discovery_failures = frozenset(
+                test_id
+                for test_id, suite in zip(request.test_ids, loaded, strict=True)
+                if _contains_failed_test(suite)
+            )
+            suite = unittest.TestSuite(loaded)
+            result = RecordingTestResult()
+            suite.run(result)
     return WorkerResult(
         "1.0.0",
         result.testsRun,
         result.ordered_outcomes(request.test_ids, discovery_failures),
     )
+
+
+def _offline_configuration() -> bool:
+    allow_loopback = os.environ.get("P0_OFFLINE_ALLOW_LOOPBACK", "0")
+    source = os.environ.get("P0_OFFLINE_SOURCE", "check-worker")
+    if allow_loopback not in {"0", "1"} or source != "check-worker":
+        raise ValueError("invalid worker offline configuration")
+    return allow_loopback == "1"
 
 
 def run_worker_files(request_path: str, result_path: str) -> None:
@@ -259,7 +328,11 @@ def run_worker_files(request_path: str, result_path: str) -> None:
     except OSError:
         raise ValueError("worker file boundary is invalid") from None
     request = WorkerRequest.from_json(request_file.read_bytes())
-    result = execute_worker_request(request)
+    allow_loopback = _offline_configuration()
+    result = execute_worker_request(
+        request,
+        allow_loopback=allow_loopback,
+    )
     with result_file.open("x", encoding="utf-8") as stream:
         stream.write(result.to_json())
 

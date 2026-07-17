@@ -252,7 +252,7 @@ flowchart TD
   - 完成可见性：外部 DNS/TCP/UDP 尝试均被阻断并产生脱敏的 `P0_NETWORK_POLICY_VIOLATION`。
   - _Requirements: 4.1, 4.3, 4.6_
 
-- [ ] 3.5 实现受控 Python 子进程和子进程 Offline Guard
+- [x] 3.5 实现受控 Python 子进程和子进程 Offline Guard
   - _Boundary: SafeSubprocess_
   - _Depends: 2.2, 3.1, 3.3, 3.4_
   - _Estimate: 2–3 hours_
