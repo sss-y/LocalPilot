@@ -145,7 +145,7 @@ flowchart TD
   - 不新增独立 Evidence Sink、证据目录管理或自动清理。
   - _完成条件：受控集成测试分别演示 success/0、failure/1、incomplete/2，输出与状态一致，任何必需 Adapter 都不能在无父进程 Offline Guard 时运行。_
 
-- [ ] 2.2 新增可独立安全执行的 `runagent.py --help` 烟雾测试资产
+- [x] 2.2 新增可独立安全执行的 `runagent.py --help` 烟雾测试资产
   - _Boundary: `tests/p0/behavior/test_product_help.py` 及必要的测试包初始化文件_
   - _Depends: 2.1_
   - _Requirements: 5.1–5.4_
