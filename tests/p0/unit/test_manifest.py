@@ -7,6 +7,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 
+from p0_baseline.adapters import VerificationContext
 from p0_baseline.errors import ErrorCode
 from p0_baseline.manifest import (
     REQUIREMENT_IDS,
@@ -18,6 +19,8 @@ from p0_baseline.manifest import (
     validate_manifest_integrity,
     validate_json_schema,
 )
+from p0_baseline.models import CheckStatus
+from p0_baseline.runner import default_registry
 from tests.p0.unit.test_models import report
 
 
@@ -216,6 +219,35 @@ class ManifestLoaderTests(unittest.TestCase):
         data["checks"][0]["adapter"] = "internal"  # type: ignore[index]
         del data["checks"][0]["test_ids"]  # type: ignore[index]
         self.assertEqual("internal", parse_manifest(data).checks[0].adapter)
+
+    def test_active_unittest_ids_are_discoverable_leaf_checks(self) -> None:
+        manifest = load_manifest(MANIFEST_PATH)
+        loader = unittest.TestLoader()
+        for check in manifest.checks:
+            if check.adapter != "unittest":
+                continue
+            for test_id in check.test_ids:
+                with self.subTest(test_id=test_id):
+                    self.assertFalse(test_id.startswith("tests.p0.integration."))
+                    suite = loader.loadTestsFromName(test_id)
+                    self.assertEqual(1, suite.countTestCases())
+                    self.assertNotIn("_FailedTest", repr(suite))
+
+    def test_active_internal_checks_have_registered_callables(self) -> None:
+        manifest = load_manifest(MANIFEST_PATH)
+        registry = default_registry()
+        with TemporaryDirectory() as directory:
+            context = VerificationContext(
+                repository_root=REPOSITORY_ROOT,
+                run_directory=Path(directory),
+                worker_executor=lambda request: "unused",
+            )
+            for check in manifest.checks:
+                if check.adapter != "internal":
+                    continue
+                with self.subTest(check_id=check.check_id):
+                    result = registry.internal.execute(context, check)
+                    self.assertIs(result.status, CheckStatus.PASSED)
 
     def test_only_approved_supported_environment_is_accepted(self) -> None:
         mutations = (

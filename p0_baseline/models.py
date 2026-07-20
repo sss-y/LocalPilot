@@ -154,7 +154,7 @@ def _freeze_json(value: object, name: str = "JSON value") -> object:
         return value
     if type(value) in {list, tuple}:
         return tuple(_freeze_json(item, name) for item in value)
-    if type(value) is dict:
+    if type(value) in {dict, MappingProxyType}:
         if any(type(key) is not str for key in value):
             raise ValueError(f"{name} JSON object keys must be strings")
         return MappingProxyType({key: _freeze_json(item, name) for key, item in value.items()})

@@ -162,7 +162,7 @@ flowchart TD
   - 不修改 `runagent.py`、`agent/**`、`core/**` 或 `tools/**`。
   - _完成条件：直接 discovery 和 Worker 两条路径均通过；测试资产单独提交后进入 HEAD。_
 
-- [ ] 2.3 收缩活动 Manifest 并只登记叶子检查
+- [x] 2.3 收缩活动 Manifest 并只登记叶子检查
   - _Boundary: `p0_baseline/manifest.json`, 必要的 Manifest/Schema 测试_
   - _Depends: 2.2 已提交，新增测试资产已是 HEAD blob_
   - _Requirements: 1.2, 2.3, 5.1, 5.2, 7.2–7.4_

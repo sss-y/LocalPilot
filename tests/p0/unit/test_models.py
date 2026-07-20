@@ -249,6 +249,19 @@ class ValueObjectTests(unittest.TestCase):
                 original = check(status)
                 self.assertEqual(original, CheckResult.from_dict(original.to_dict()))
 
+    def test_nested_observed_mapping_round_trips_after_freezing(self) -> None:
+        original = CheckResult.from_dict(
+            {
+                **check().to_dict(),
+                "observed": {"outcome_counts": {"passed": 1}},
+            }
+        )
+
+        self.assertEqual(
+            {"outcome_counts": {"passed": 1}},
+            original.to_dict()["observed"],
+        )
+
     def test_environment_round_trip_and_types_are_strict(self) -> None:
         original = environment()
         self.assertEqual(original, EnvironmentSnapshot.from_dict(original.to_dict()))
