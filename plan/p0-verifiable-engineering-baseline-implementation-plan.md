@@ -127,7 +127,7 @@ flowchart TD
 
 ### 2. 贯通体检命令
 
-- [ ] 2.1 实现最小 Runner、CLI、父进程离线保护和可选文件输出
+- [x] 2.1 实现最小 Runner、CLI、父进程离线保护和可选文件输出
   - _Boundary: `p0_baseline/runner.py`, `cli.py`, `__main__.py`, 必要的 Schema 调整及对应测试_
   - _Depends: 1.2_
   - _Requirements: 1.1–1.4, 2.1–2.5, 3.1–3.4, 4.1–4.7, 6.1_
