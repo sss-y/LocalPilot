@@ -93,7 +93,7 @@ flowchart TD
 
 ### 1. 收口状态语义
 
-- [ ] 1.1 完成三态 Aggregator
+- [x] 1.1 完成三态 Aggregator
   - _Boundary: `p0_baseline/aggregation.py`, `tests/p0/unit/test_aggregation.py`_
   - _Depends: 0.1_
   - _Requirements: 4.1–4.6_
