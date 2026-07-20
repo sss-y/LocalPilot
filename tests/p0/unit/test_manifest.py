@@ -339,16 +339,49 @@ class ManifestIntegrityTests(unittest.TestCase):
             dependency_lock=path,
         )
 
-    def test_current_manifest_assets_are_head_tracked_and_all_56_requirements_are_covered(self) -> None:
-        result = validate_manifest_integrity(load_manifest(MANIFEST_PATH), REPOSITORY_ROOT)
+    def test_current_manifest_assets_are_head_tracked_and_actual_mappings_are_reported(self) -> None:
+        manifest = load_manifest(MANIFEST_PATH)
+        result = validate_manifest_integrity(manifest, REPOSITORY_ROOT)
+        expected_requirements = tuple(
+            requirement_id
+            for requirement_id in REQUIREMENT_IDS
+            if any(
+                requirement_id in check.requirement_ids
+                for check in manifest.checks
+            )
+        )
 
         self.assertRegex(result.manifest_digest, r"^sha256:[0-9a-f]{64}$")
-        self.assertEqual(56, len(result.requirement_coverage))
-        self.assertEqual(REQUIREMENT_IDS, tuple(item.requirement_id for item in result.requirement_coverage))
         self.assertEqual(
-            tuple(asset.path for asset in load_manifest(MANIFEST_PATH).required_assets),
+            expected_requirements,
+            tuple(item.requirement_id for item in result.requirement_coverage),
+        )
+        self.assertEqual(
+            tuple(asset.path for asset in manifest.required_assets),
             result.asset_paths,
         )
+
+    def test_integrity_returns_only_actual_legacy_mappings_in_stable_order(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._repository(root)
+            manifest = self._manifest_for_asset("asset.txt")
+            partial = replace(
+                manifest,
+                checks=(
+                    replace(
+                        manifest.checks[0],
+                        requirement_ids=("7.4", "1.1"),
+                    ),
+                ),
+            )
+
+            result = validate_manifest_integrity(partial, root)
+
+            self.assertEqual(
+                ("1.1", "7.4"),
+                tuple(item.requirement_id for item in result.requirement_coverage),
+            )
 
     def test_missing_ignored_untracked_and_adjacent_assets_fail_closed(self) -> None:
         with TemporaryDirectory() as directory, TemporaryDirectory() as adjacent:
@@ -379,7 +412,7 @@ class ManifestIntegrityTests(unittest.TestCase):
                         validate_manifest_integrity(self._manifest_for_asset(path), root)
                     self.assertIs(caught.exception.code, ErrorCode.ASSET_MISSING)
 
-    def test_unknown_asset_reference_and_missing_requirement_mapping_fail(self) -> None:
+    def test_unknown_asset_reference_fails_closed(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             self._repository(root)
@@ -392,14 +425,6 @@ class ManifestIntegrityTests(unittest.TestCase):
             with self.assertRaises(ManifestIntegrityError) as asset_error:
                 validate_manifest_integrity(unknown_ref, root)
             self.assertIs(asset_error.exception.code, ErrorCode.ASSET_MISSING)
-
-            incomplete = replace(
-                manifest,
-                checks=(replace(manifest.checks[0], requirement_ids=REQUIREMENT_IDS[:-1]),),
-            )
-            with self.assertRaises(ManifestIntegrityError) as coverage_error:
-                validate_manifest_integrity(incomplete, root)
-            self.assertIs(coverage_error.exception.code, ErrorCode.MANIFEST_INVALID)
 
     def test_manifest_digest_is_stable_and_changes_with_semantic_content(self) -> None:
         with TemporaryDirectory() as directory:

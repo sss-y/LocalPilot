@@ -466,12 +466,10 @@ def _requirement_coverage(manifest: BaselineManifest) -> tuple[RequirementMappin
         )
         for requirement_id in REQUIREMENT_IDS
     }
-    missing = tuple(key for key, check_ids in mapping.items() if not check_ids)
-    if missing:
-        raise ManifestIntegrityError(ErrorCode.MANIFEST_INVALID, missing[0])
     return tuple(
         RequirementMapping(requirement_id, mapping[requirement_id])
         for requirement_id in REQUIREMENT_IDS
+        if mapping[requirement_id]
     )
 
 

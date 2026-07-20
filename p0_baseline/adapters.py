@@ -13,6 +13,7 @@ from .check_worker import WorkerOutcome, WorkerRequest, WorkerResult
 from .errors import ErrorCode
 from .manifest import CheckDescriptor
 from .models import CheckResult, CheckStatus, Diagnostic
+from .safe_subprocess import SafeSubprocessError
 
 
 WorkerExecutor = Callable[[WorkerRequest], WorkerResult | str | bytes]
@@ -285,6 +286,28 @@ class UnittestAdapter:
                 started_ns=started_ns,
                 diagnostics=diagnostics,
                 observed=observed,
+            )
+        except SafeSubprocessError as exc:
+            if exc.reason == "P0_WORKER_TIMEOUT":
+                return _result(
+                    descriptor,
+                    CheckStatus.INTERRUPTED,
+                    started_at=started_at,
+                    started_ns=started_ns,
+                    diagnostics=(
+                        _diagnostic(
+                            ErrorCode.CHECK_INTERRUPTED,
+                            descriptor,
+                            "interrupted",
+                        ),
+                    ),
+                )
+            return _result(
+                descriptor,
+                CheckStatus.ERROR,
+                started_at=started_at,
+                started_ns=started_ns,
+                diagnostics=(_diagnostic(ErrorCode.CHECK_ERROR, descriptor, "worker"),),
             )
         except Exception:
             return _result(

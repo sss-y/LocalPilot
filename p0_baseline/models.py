@@ -27,13 +27,6 @@ _SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
                      r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
-_SUCCESS_REQUIREMENTS = frozenset(
-    f"{group}.{criterion}"
-    for group, total in {1: 5, 2: 6, 3: 6, 4: 6, 5: 6, 6: 9, 7: 6, 8: 6, 9: 6}.items()
-    for criterion in range(1, total + 1)
-)
-
-
 class BaselineStatus(str, Enum):
     SUCCESS = "success"
     FAILURE = "failure"
@@ -601,16 +594,13 @@ class BaselineReport:
         _nonnegative_integer(redaction["matched_values"], "redaction.matched_values")
 
         required_statuses = {item.status for item in self.checks if item.required}
-        coverage_statuses = {item.status for item in self.requirement_coverage}
         definite_failure = bool(
             required_statuses & {CheckStatus.FAILED, CheckStatus.ERROR}
-            or CoverageStatus.FAILED in coverage_statuses
             or any(item.code in FAILURE_ERROR_CODES for item in (*self.environment.violations, *self.run_diagnostics))
         )
         incomplete_condition = bool(
             required_statuses
             & {CheckStatus.SKIPPED, CheckStatus.NOT_RUN, CheckStatus.INTERRUPTED}
-            or CoverageStatus.INCOMPLETE in coverage_statuses
             or any(
                 item.code not in FAILURE_ERROR_CODES
                 for item in (*self.environment.violations, *self.run_diagnostics)
@@ -637,11 +627,6 @@ class BaselineReport:
                 raise ValueError("success requires a clean working tree")
             if not self.environment.supported or self.environment.personal_credentials_loaded:
                 raise ValueError("success requires a supported credential-free environment")
-            actual = set(requirement_ids)
-            if not _SUCCESS_REQUIREMENTS.issubset(actual):
-                raise ValueError("success requires all 56 Requirement IDs from groups 1-9")
-            if coverage_statuses != {CoverageStatus.PASSED}:
-                raise ValueError("success requires passed Requirement coverage")
 
     def to_dict(self) -> dict[str, object]:
         self._validate()

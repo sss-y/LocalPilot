@@ -109,7 +109,7 @@ flowchart TD
   - 删除临时 feature flag 后重新运行测试。
   - _完成条件：现有真值表全部通过，返回稳定的 `AggregationResult` 和 0/1/2。_
 
-- [ ] 1.2 对齐 timeout 和旧 Requirement 映射语义
+- [x] 1.2 对齐 timeout 和旧 Requirement 映射语义
   - _Boundary: `p0_baseline/adapters.py`, `models.py`, `manifest.py`, `tests/p0/unit/test_check_runtime.py`, `test_models.py`, `test_manifest.py`_
   - _Depends: 1.1_
   - _Requirements: 4.4, 4.5, 7.1–7.4_

@@ -286,6 +286,31 @@ class ReportInvariantTests(unittest.TestCase):
         self.assertEqual(original, BaselineReport.from_dict(encoded))
         self.assertEqual(encoded, json.loads(json.dumps(encoded)))
 
+    def test_success_does_not_require_legacy_requirement_coverage(self) -> None:
+        successful = report(
+            checks=(check(requirement_ids=("3.2",)),),
+            coverage=(),
+        )
+
+        self.assertIs(successful.overall_status, BaselineStatus.SUCCESS)
+
+    def test_legacy_coverage_status_does_not_override_success(self) -> None:
+        for status in (CoverageStatus.FAILED, CoverageStatus.INCOMPLETE):
+            with self.subTest(status=status):
+                legacy = RequirementCoverage(
+                    requirement_id="3.2",
+                    status=status,
+                    check_ids=("behavior.cli",),
+                    evidence_refs=("evidence.json",),
+                )
+
+                successful = report(
+                    checks=(check(requirement_ids=("3.2",)),),
+                    coverage=(legacy,),
+                )
+
+                self.assertIs(successful.overall_status, BaselineStatus.SUCCESS)
+
     def test_status_exit_code_truth_table_is_enforced(self) -> None:
         original = report().to_dict()
         for status, correct in (("success", 0), ("failure", 1), ("incomplete", 2)):
@@ -304,7 +329,7 @@ class ReportInvariantTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "summary"):
             BaselineReport.from_dict(encoded)
 
-    def test_success_requires_all_required_checks_and_full_passed_coverage(self) -> None:
+    def test_success_requires_all_required_checks_to_pass(self) -> None:
         for status in (
             CheckStatus.FAILED,
             CheckStatus.ERROR,
@@ -314,16 +339,6 @@ class ReportInvariantTests(unittest.TestCase):
         ):
             with self.subTest(status=status), self.assertRaises(ValueError):
                 report(checks=(check(status),))
-        with self.assertRaisesRegex(ValueError, "56"):
-            report(coverage=all_success_coverage()[:-1])
-        failed = RequirementCoverage(
-            requirement_id="1.1",
-            status=CoverageStatus.FAILED,
-            check_ids=("behavior.cli",),
-            evidence_refs=("evidence.json",),
-        )
-        with self.assertRaises(ValueError):
-            report(coverage=(failed,) + all_success_coverage()[1:])
 
     def test_acceptance_eligibility_requires_clean_supported_offline_environment(self) -> None:
         invalid_environments = (
@@ -360,19 +375,7 @@ class ReportInvariantTests(unittest.TestCase):
                 coverage=(),
             )
 
-    def test_incomplete_signals_cannot_be_reported_as_success(self) -> None:
-        incomplete_coverage = RequirementCoverage(
-            requirement_id="3.2",
-            status=CoverageStatus.INCOMPLETE,
-            check_ids=("behavior.cli",),
-            evidence_refs=("evidence.json",),
-        )
-        with self.assertRaisesRegex(ValueError, "incomplete"):
-            report(
-                status=BaselineStatus.SUCCESS,
-                checks=(check(requirement_ids=("3.2",)),),
-                coverage=(incomplete_coverage,),
-            )
+    def test_run_level_incomplete_signals_cannot_be_reported_as_success(self) -> None:
         with self.assertRaisesRegex(ValueError, "incomplete"):
             report(
                 status=BaselineStatus.SUCCESS,

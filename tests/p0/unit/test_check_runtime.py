@@ -386,9 +386,22 @@ class AdapterTests(unittest.TestCase):
                 self.assertEqual(ErrorCode.CHECK_ERROR, result.diagnostics[0].code)
                 self.assertEqual("result_integrity", result.diagnostics[0].failure_type)
 
-    def test_worker_process_failures_become_check_errors_without_leaking_reason(self) -> None:
+    def test_worker_timeout_becomes_interrupted_without_leaking_reason(self) -> None:
+        reason = "P0_WORKER_TIMEOUT"
+
+        result = UnittestAdapter().execute(
+            self._context(
+                lambda request: (_ for _ in ()).throw(SafeSubprocessError(reason))
+            ),
+            descriptor(),
+        )
+
+        self.assertIs(result.status, CheckStatus.INTERRUPTED)
+        self.assertEqual(ErrorCode.CHECK_INTERRUPTED, result.diagnostics[0].code)
+        self.assertNotIn(reason, repr(result.to_dict()))
+
+    def test_other_worker_process_failures_become_check_errors_without_leaking_reason(self) -> None:
         for reason in (
-            "P0_WORKER_TIMEOUT",
             "P0_WORKER_EXIT_NONZERO",
             "P0_WORKER_RESULT_MISSING",
             "P0_WORKER_RESULT_INVALID",
