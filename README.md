@@ -51,6 +51,8 @@ flowchart TD
 
 ## 快速开始
 
+需要运行本地、默认离线的工程体检时，请先阅读 [P0 工程体检说明](./P0_BASELINE.md)。
+
 建议使用 Python 3.11+。
 
 ```bash

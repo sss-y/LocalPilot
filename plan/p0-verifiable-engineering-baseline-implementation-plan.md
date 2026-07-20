@@ -180,7 +180,7 @@ flowchart TD
 
 ### 3. 文档和最终验收
 
-- [ ] 3.1 更新使用说明并完成可自动判定的本地验收
+- [x] 3.1 更新使用说明并完成可自动判定的本地验收
   - _Boundary: `P0_BASELINE.md`, README 中的最小 P0 入口说明，外层 dirty 语义验证测试或脚本，任务内发现的必要小修复_
   - _Depends: 2.3_
   - _Requirements: 6.1–6.4_
